@@ -21,6 +21,8 @@ using System.Collections.Generic;
 [RequireComponent(typeof(PongServer))]
 public class PongServerGame : MonoBehaviour
 {
+    const int MinPlayersToPlay = 2;
+
     [Header("Arena")]
     public float ArenaHalfWidth = 6f;
     public float ArenaHalfHeight = 5f;
@@ -28,17 +30,23 @@ public class PongServerGame : MonoBehaviour
     public float PaddleClampY = 4f;
 
     [Header("Ball")]
-    public float BallSpeed = 6f;
+    public float BallSpeed = 4f;
     public float BallRadius = 0.25f;
     public Vector2 BallStart = Vector2.zero;
 
     [Header("Networking")]
     [Tooltip("How many STATE updates per second to broadcast.")]
     public float StateUpdateRate = 30f;
+    [Tooltip("Enable throttled server-side debug logs for PADDLE/STATE flow.")]
+    public bool DebugNetworkLogs = false;
+    [Tooltip("Max debug log frequency in logs/second.")]
+    public float DebugLogRate = 1f;
 
     [Header("Game")]
     [Tooltip("Lines defined for this match. Index = line id. Scales from 2 to N.")]
     public List<LineConfig> Lines = new List<LineConfig>();
+    [Tooltip("Enable milestone-2 line damage/breaking rules. Keep off for classic 2-player Pong.")]
+    public bool EnableLineDamage = false;
 
     /// <summary>Configuration for one line (paddle/wall) around the arena.</summary>
     [System.Serializable]
@@ -61,7 +69,7 @@ public class PongServerGame : MonoBehaviour
         public int Health;
     }
 
-    public enum BallState { Playing, Won }
+    public enum BallState { WaitingForPlayers, Playing, Won }
 
     PongServer _server;
     LineRuntime[] _runtime;
@@ -70,6 +78,8 @@ public class PongServerGame : MonoBehaviour
     BallState _state = BallState.Playing;
     int _winnerLine = -1;
     float _stateAccumulator;
+    float _nextDebugPaddleLogTime;
+    float _nextDebugStateLogTime;
 
     void Awake()
     {
@@ -115,19 +125,29 @@ public class PongServerGame : MonoBehaviour
     void Start()
     {
         EnsureRuntime();
-        ServeBall();
+        EnterWaitingForPlayers("startup");
     }
 
     void Update()
     {
         if (!_server.IsListening) return;
         EnsureRuntime();
+        float dt = Time.unscaledDeltaTime;
+        int assignedCount = GetAssignedCount();
 
-        if (_state == BallState.Playing) {
-            StepBall(Time.deltaTime);
+        if (assignedCount < MinPlayersToPlay) {
+            if (_state != BallState.WaitingForPlayers) {
+                EnterWaitingForPlayers("player disconnected");
+            }
+        } else if (_state == BallState.WaitingForPlayers) {
+            StartMatch();
         }
 
-        _stateAccumulator += Time.deltaTime;
+        if (_state == BallState.Playing) {
+            StepBall(dt);
+        }
+
+        _stateAccumulator += dt;
         float interval = StateUpdateRate > 0f ? 1f / StateUpdateRate : 0.033f;
         if (_stateAccumulator >= interval) {
             _stateAccumulator = 0f;
@@ -167,6 +187,9 @@ public class PongServerGame : MonoBehaviour
             rt.Owner = null;
             rt.PaddleY = 0f;
         }
+        if (GetAssignedCount() < MinPlayersToPlay && _state != BallState.WaitingForPlayers) {
+            EnterWaitingForPlayers("player disconnected");
+        }
     }
 
     void HandleMessage(PongServer.ClientConnection client, string message)
@@ -182,6 +205,10 @@ public class PongServerGame : MonoBehaviour
                 if (client.LineIndex >= 0 && client.LineIndex < _runtime.Length) {
                     float clamped = Mathf.Clamp(y, -PaddleClampY, PaddleClampY);
                     _runtime[client.LineIndex].PaddleY = clamped;
+                    if (DebugNetworkLogs && Time.time >= _nextDebugPaddleLogTime) {
+                        _nextDebugPaddleLogTime = Time.time + GetDebugInterval();
+                        Debug.Log("PongServerGame DBG PADDLE line=" + client.LineIndex + " y=" + clamped.ToString("0.###"));
+                    }
                 }
             }
         }
@@ -191,6 +218,11 @@ public class PongServerGame : MonoBehaviour
 
     void ServeBall()
     {
+        if (GetAssignedCount() < MinPlayersToPlay) {
+            EnterWaitingForPlayers("not enough players");
+            return;
+        }
+
         _ballPos = BallStart;
         _ballDir = new Vector2(
             Random.Range(0.5f, 1f),
@@ -204,6 +236,25 @@ public class PongServerGame : MonoBehaviour
         if (_server != null && _server.IsListening) {
             _server.Broadcast(PongProtocol.FormatReset());
         }
+    }
+
+    void StartMatch()
+    {
+        Debug.Log("PongServerGame: MATCH_STARTED");
+        ServeBall();
+    }
+
+    void EnterWaitingForPlayers(string reason)
+    {
+        CancelInvoke(nameof(ServeBall));
+        _state = BallState.WaitingForPlayers;
+        _winnerLine = -1;
+        _ballPos = BallStart;
+        _ballDir = Vector2.zero;
+        if (_server != null && _server.IsListening) {
+            _server.Broadcast(PongProtocol.FormatReset());
+        }
+        Debug.Log("PongServerGame: MATCH_ENDED_WAITING (" + GetAssignedCount() + "/" + MinPlayersToPlay + ") reason=" + reason);
     }
 
     void StepBall(float dt)
@@ -249,6 +300,7 @@ public class PongServerGame : MonoBehaviour
     /// </summary>
     protected virtual void OnBallHitLine(int lineIndex)
     {
+        if (!EnableLineDamage) return;
         var rt = _runtime[lineIndex];
         if (rt.Health >= 2) return; // already broken: shouldn't have been hit, but safe-guard
 
@@ -298,6 +350,18 @@ public class PongServerGame : MonoBehaviour
         for (int i = 0; i < _runtime.Length; i++) paddleYs[i] = _runtime[i].PaddleY;
 
         _server.Broadcast(PongProtocol.FormatState(_ballPos.x, _ballPos.y, paddleYs));
+        if (DebugNetworkLogs && Time.time >= _nextDebugStateLogTime) {
+            _nextDebugStateLogTime = Time.time + GetDebugInterval();
+            Debug.Log("PongServerGame DBG STATE ball=("
+                + _ballPos.x.ToString("0.##") + ","
+                + _ballPos.y.ToString("0.##") + ") paddles=["
+                + string.Join(",", System.Array.ConvertAll(paddleYs, v => v.ToString("0.##"))) + "]");
+        }
+    }
+
+    float GetDebugInterval()
+    {
+        return DebugLogRate > 0f ? 1f / DebugLogRate : 1f;
     }
 
     int FindFreeLine()
@@ -306,6 +370,16 @@ public class PongServerGame : MonoBehaviour
             if (!_runtime[i].Assigned) return i;
         }
         return -1;
+    }
+
+    int GetAssignedCount()
+    {
+        if (_runtime == null) return 0;
+        int count = 0;
+        for (int i = 0; i < _runtime.Length; i++) {
+            if (_runtime[i].Assigned) count++;
+        }
+        return count;
     }
 
     /// <summary>

@@ -15,10 +15,15 @@ public class PongClient : MonoBehaviour
 {
     public string DestinationIP = "127.0.0.1";
     public int DestinationPort = 25000;
+    [Tooltip("Enable throttled client-side debug logs for incoming messages.")]
+    public bool DebugNetworkLogs = false;
+    [Tooltip("Max debug log frequency in logs/second.")]
+    public float DebugLogRate = 1f;
 
     TcpClient _tcp;
     readonly PongMessageBuffer _buffer = new PongMessageBuffer();
     readonly byte[] _readBuffer = new byte[4096];
+    float _nextDebugStateLogTime;
 
     public bool IsConnected => _tcp != null && _tcp.Connected;
 
@@ -121,6 +126,9 @@ public class PongClient : MonoBehaviour
                     && PongProtocol.TryParseInt(parts[2], out int count)) {
                     LineIndex = idx;
                     LineCount = count;
+                    if (DebugNetworkLogs) {
+                        Debug.Log("PongClient DBG ASSIGN line=" + idx + " lineCount=" + count);
+                    }
                     OnAssign?.Invoke(idx, count);
                 }
                 break;
@@ -132,6 +140,13 @@ public class PongClient : MonoBehaviour
                     int n = parts.Length - 3;
                     var ys = new float[n];
                     for (int i = 0; i < n; i++) PongProtocol.TryParseFloat(parts[3 + i], out ys[i]);
+                    if (DebugNetworkLogs && Time.time >= _nextDebugStateLogTime) {
+                        _nextDebugStateLogTime = Time.time + GetDebugInterval();
+                        Debug.Log("PongClient DBG STATE ball=("
+                            + bx.ToString("0.##") + "," + by.ToString("0.##")
+                            + ") ownedLine=" + LineIndex + " paddles=["
+                            + string.Join(",", System.Array.ConvertAll(ys, v => v.ToString("0.##"))) + "]");
+                    }
                     OnState?.Invoke(new Vector2(bx, by), ys);
                 }
                 break;
@@ -180,5 +195,10 @@ public class PongClient : MonoBehaviour
         }
         LineIndex = -1;
         LineCount = 0;
+    }
+
+    float GetDebugInterval()
+    {
+        return DebugLogRate > 0f ? 1f / DebugLogRate : 1f;
     }
 }

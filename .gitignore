@@ -8,6 +8,10 @@
 /Log/
 /Logs/
 /Build/
+/[Bb]uilds/
+# Local macOS player builds (e.g. build:pongClient.app)
+*.app/
+build*.app/
 *.0.2.zip
 *.zip
 /UserSettings/

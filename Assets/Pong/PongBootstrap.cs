@@ -48,6 +48,8 @@ public class PongBootstrap : MonoBehaviour
 
     void Awake()
     {
+        // Keep simulation/network alive when Unity window is unfocused.
+        Application.runInBackground = true;
         EnsureCamera();
         BuildArenaVisuals();
 

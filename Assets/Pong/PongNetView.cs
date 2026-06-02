@@ -27,6 +27,10 @@ public class PongNetView : MonoBehaviour
 
     [Tooltip("Interpolation factor per second (higher = snappier, lower = smoother).")]
     public float InterpolationRate = 18f;
+    [Tooltip("Enable throttled client view logs for remote paddle application.")]
+    public bool DebugViewLogs = false;
+    [Tooltip("Max debug log frequency in logs/second.")]
+    public float DebugLogRate = 1f;
 
     [Header("Damage visuals (Milestone 2)")]
     public Color IntactColor    = Color.white;
@@ -36,16 +40,12 @@ public class PongNetView : MonoBehaviour
     Vector3? _targetBall;
     float[] _targetPaddleY;
     int[]   _lineHealth; // 0=Intact, 1=Scattered, 2=Broken
+    PongClient _subscribedClient;
+    float _nextDebugViewLogTime;
 
     void OnEnable()
     {
-        if (Client != null) {
-            Client.OnAssign += HandleAssign;
-            Client.OnState += HandleState;
-            Client.OnReset += HandleReset;
-            Client.OnDamage += HandleDamage;
-            Client.OnGeometry += HandleGeometry;
-        }
+        BindClientEvents();
         int n = Paddles != null ? Paddles.Length : 0;
         _targetPaddleY = new float[n];
         _lineHealth    = new int[n];
@@ -57,13 +57,33 @@ public class PongNetView : MonoBehaviour
 
     void OnDisable()
     {
-        if (Client != null) {
-            Client.OnAssign -= HandleAssign;
-            Client.OnState -= HandleState;
-            Client.OnReset -= HandleReset;
-            Client.OnDamage -= HandleDamage;
-            Client.OnGeometry -= HandleGeometry;
-        }
+        UnbindClientEvents();
+    }
+
+    void BindClientEvents()
+    {
+        if (_subscribedClient == Client) return;
+        UnbindClientEvents();
+        if (Client == null) return;
+
+        Client.OnAssign += HandleAssign;
+        Client.OnState += HandleState;
+        Client.OnReset += HandleReset;
+        Client.OnDamage += HandleDamage;
+        Client.OnGeometry += HandleGeometry;
+        _subscribedClient = Client;
+    }
+
+    void UnbindClientEvents()
+    {
+        if (_subscribedClient == null) return;
+
+        _subscribedClient.OnAssign -= HandleAssign;
+        _subscribedClient.OnState -= HandleState;
+        _subscribedClient.OnReset -= HandleReset;
+        _subscribedClient.OnDamage -= HandleDamage;
+        _subscribedClient.OnGeometry -= HandleGeometry;
+        _subscribedClient = null;
     }
 
     void HandleGeometry(System.Collections.Generic.IList<float> lineXs)
@@ -141,6 +161,9 @@ public class PongNetView : MonoBehaviour
 
     void Update()
     {
+        // PongBootstrap assigns Client after AddComponent, so rebind lazily.
+        BindClientEvents();
+
         float t = 1f - Mathf.Exp(-InterpolationRate * Time.deltaTime); // frame-rate independent lerp
 
         if (Ball != null && _targetBall.HasValue) {
@@ -176,6 +199,19 @@ public class PongNetView : MonoBehaviour
             p.y = Mathf.Lerp(p.y, _targetPaddleY[i], t);
             Paddles[i].position = p;
         }
+
+        if (DebugViewLogs && Time.time >= _nextDebugViewLogTime) {
+            _nextDebugViewLogTime = Time.time + GetDebugInterval();
+            string remoteInfo = string.Empty;
+            for (int i = 0; i < Paddles.Length; i++) {
+                if (i == ownedLine || Paddles[i] == null) continue;
+                if (remoteInfo.Length > 0) remoteInfo += " | ";
+                remoteInfo += "line " + i + " y=" + Paddles[i].position.y.ToString("0.##")
+                    + " target=" + _targetPaddleY[i].ToString("0.##");
+            }
+            if (string.IsNullOrEmpty(remoteInfo)) remoteInfo = "no remote line visible yet";
+            Debug.Log("PongNetView DBG ownedLine=" + ownedLine + " :: " + remoteInfo);
+        }
     }
 
     /// <summary>Used by PongNetPaddle to find which Transform to move locally.</summary>
@@ -185,5 +221,10 @@ public class PongNetView : MonoBehaviour
         int idx = Client.LineIndex;
         if (Paddles == null || idx < 0 || idx >= Paddles.Length) return null;
         return Paddles[idx];
+    }
+
+    float GetDebugInterval()
+    {
+        return DebugLogRate > 0f ? 1f / DebugLogRate : 1f;
     }
 }
