@@ -8,11 +8,12 @@ using System.Text;
 /// Floats use invariant culture so '.' is the decimal separator on every locale.
 ///
 /// Client -> Server:
-///   PADDLE <y>
+///   PADDLE <ringAngleRadians>
 ///
 /// Server -> Client:
 ///   ASSIGN <lineIndex> <lineCount>
-///   STATE  <ballX> <ballY> <y0> <y1> ... <yN-1>
+///   ROSTER <lineCount>
+///   STATE  <ballX> <ballY> <angle0> <angle1> ... <angleN-1>
 ///   SCORE  <lineIndex> <score>
 ///   DAMAGE <lineIndex> <state>            (state: 0=Intact, 1=Scattered, 2=Broken)
 ///   WIN    <lineIndex>
@@ -31,6 +32,7 @@ public static class PongProtocol
     public const string MsgWin      = "WIN";
     public const string MsgReset    = "RESET";
     public const string MsgGeometry = "GEOMETRY";
+    public const string MsgRoster   = "ROSTER";
 
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -64,6 +66,9 @@ public static class PongProtocol
 
     public static string FormatReset()
         => MsgReset + MessageDelimiter;
+
+    public static string FormatRoster(int lineCount)
+        => MsgRoster + FieldSeparator + lineCount.ToString(Inv) + MessageDelimiter;
 
     /// <summary>Broadcast new X positions for every line. Sent after gap merge (line broken).</summary>
     public static string FormatGeometry(IList<float> lineXs)

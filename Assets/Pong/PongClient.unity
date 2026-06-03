@@ -149,17 +149,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PongBootstrap
   Mode: 1
-  ArenaHalfWidth: 6
-  ArenaHalfHeight: 5
-  PaddleLineX: 5
-  PaddleSize: {x: 0.3, y: 2}
   BallSize: 0.5
-  LineCount: 2
-  DefaultServerIP: 172.20.10.11
+  DefaultServerIP: 
   DefaultPort: 25000
-  AutoStart: 1
+  AutoStart: 0
   Ball: {fileID: 0}
   Paddles: []
+  CircleArena: {fileID: 0}
   Server: {fileID: 0}
   ServerGame: {fileID: 0}
   Client: {fileID: 0}

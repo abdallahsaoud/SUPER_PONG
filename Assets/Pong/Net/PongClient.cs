@@ -35,8 +35,10 @@ public class PongClient : MonoBehaviour
     public delegate void WinHandler(int lineIndex);
     public delegate void ResetHandler();
     public delegate void GeometryHandler(IList<float> lineXs);
+    public delegate void RosterHandler(int lineCount);
 
     public AssignHandler   OnAssign;
+    public RosterHandler   OnRoster;
     public StateHandler    OnState;
     public ScoreHandler    OnScore;
     public DamageHandler   OnDamage;
@@ -49,19 +51,44 @@ public class PongClient : MonoBehaviour
     /// <summary>Total line count in the match (after ASSIGN arrives, 0 until then).</summary>
     public int LineCount { get; private set; } = 0;
 
+    /// <summary>Last roster size received (for replay when view subscribes late).</summary>
+    public int LastRosterCount { get; private set; }
+
+    /// <summary>Human-readable result of the last Connect() attempt.</summary>
+    public string LastError { get; private set; } = string.Empty;
+
     public bool Connect()
     {
         if (_tcp != null) {
-            Debug.LogWarning("PongClient already connected. Close first.");
+            LastError = "Already connected. Disconnect first.";
+            Debug.LogWarning("PongClient: " + LastError);
+            return false;
+        }
+
+        DestinationIP = PongNetworkUtil.NormalizeIp(DestinationIP);
+        if (!PongNetworkUtil.IsUsableClientTarget(DestinationIP)) {
+            LastError = "Invalid server IP.";
+            Debug.LogWarning("PongClient: " + LastError);
             return false;
         }
 
         try {
             _tcp = new TcpClient();
-            _tcp.Connect(DestinationIP, DestinationPort);
+            _tcp.ReceiveTimeout = 5000;
+            _tcp.SendTimeout = 5000;
+            var result = _tcp.BeginConnect(DestinationIP, DestinationPort, null, null);
+            bool completed = result.AsyncWaitHandle.WaitOne(System.TimeSpan.FromSeconds(5));
+            if (!completed || !_tcp.Connected) {
+                throw new System.TimeoutException(
+                    "Timeout — no server at " + DestinationIP + ":" + DestinationPort
+                    + ". Check IP, port, firewall, and that the host server is running.");
+            }
+            _tcp.EndConnect(result);
+            LastError = string.Empty;
             Debug.Log("PongClient connected to " + DestinationIP + ":" + DestinationPort);
             return true;
         } catch (System.Exception ex) {
+            LastError = ex.Message;
             Debug.LogWarning("PongClient connect error: " + ex.Message);
             CloseInternal();
             return false;
@@ -120,12 +147,21 @@ public class PongClient : MonoBehaviour
         string head = parts[0];
 
         switch (head) {
+            case PongProtocol.MsgRoster: {
+                if (parts.Length >= 2 && PongProtocol.TryParseInt(parts[1], out int count)) {
+                    LineCount = count;
+                    LastRosterCount = count;
+                    OnRoster?.Invoke(count);
+                }
+                break;
+            }
             case PongProtocol.MsgAssign: {
                 if (parts.Length >= 3
                     && PongProtocol.TryParseInt(parts[1], out int idx)
                     && PongProtocol.TryParseInt(parts[2], out int count)) {
                     LineIndex = idx;
                     LineCount = count;
+                    LastRosterCount = count;
                     if (DebugNetworkLogs) {
                         Debug.Log("PongClient DBG ASSIGN line=" + idx + " lineCount=" + count);
                     }
@@ -195,6 +231,7 @@ public class PongClient : MonoBehaviour
         }
         LineIndex = -1;
         LineCount = 0;
+        LastRosterCount = 0;
     }
 
     float GetDebugInterval()

@@ -46,15 +46,10 @@ public static class PongSceneGenerator
         var go = new GameObject("PongBootstrap");
         var bootstrap = go.AddComponent<PongBootstrap>();
         bootstrap.Mode = role;
-        bootstrap.ArenaHalfWidth = 6f;
-        bootstrap.ArenaHalfHeight = 5f;
-        bootstrap.PaddleLineX = 5f;
-        bootstrap.PaddleSize = new Vector2(0.3f, 2f);
         bootstrap.BallSize = 0.5f;
-        bootstrap.LineCount = 2;
-        bootstrap.DefaultServerIP = "127.0.0.1";
-        bootstrap.DefaultPort = 25000;
-        bootstrap.AutoStart = true;
+        bootstrap.DefaultServerIP = role == PongBootstrap.Role.Server ? "127.0.0.1" : "";
+        bootstrap.DefaultPort = PongNetworkUtil.DefaultPort;
+        bootstrap.AutoStart = role == PongBootstrap.Role.Server;
 
         EditorSceneManager.SaveScene(scene, path);
     }
