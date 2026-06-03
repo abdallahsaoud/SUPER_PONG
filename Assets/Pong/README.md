@@ -22,7 +22,8 @@ in line with the course constraint
 - `Net/PongServerGame.cs` — authoritative game loop (ball, scoring, line
   assignment, per-line health hook for Milestone 2).
 - `Net/PongClient.cs` — TCP connection, typed message events.
-- `PongBootstrap.cs` — procedurally builds the scene (camera, ball, paddles)
+- `CircleArenaConfig.cs` / `PongCircleArena.cs` — circular ring + platform slots.
+- `PongBootstrap.cs` — procedurally builds the scene (camera, ball, circle arena)
   and wires the right components based on a `Mode = Server | Client` role.
 - `PongNetPaddle.cs` — locally-controlled line (InputSystem → local movement →
   send PADDLE to server).
@@ -40,13 +41,24 @@ in line with the course constraint
 Each scene contains a single `PongBootstrap` GameObject; at Play it builds the
 camera, ball, and paddles, and wires the server or client components for you.
 
-## Running locally
+## Running locally (Editor)
 
-1. Open `Assets/Pong/PongServer.unity` and press Play. The server listens on
-   TCP port 25000 by default.
-2. Open `Assets/Pong/PongClient.unity` in a second editor (or build a client)
-   and press Play. The bootstrap auto-connects to `127.0.0.1:25000`.
-3. Repeat step 2 for a second client. Use **W/S** to move your line.
+1. Open `Assets/Pong/PongServer.unity` and press Play (listens on port **25000**).
+2. Open `Assets/Pong/PongClient.unity` and press Play — enter `127.0.0.1` on the
+   connect overlay, or launch with `-serverIP 127.0.0.1`.
+3. Repeat for more clients. Use **← / →** to move on the circle.
+
+## LAN / builds (two machines)
+
+1. **Host** builds and runs **PongServer** only. Check the Unity console for
+   `give clients IP: 192.168.x.x` (or run `ipconfig` on Windows / `ifconfig` on Mac).
+2. Allow **TCP port 25000** through the host firewall (incoming).
+3. **Clients** run the **PongClient** build. On the connect screen, enter the
+   host's **LAN IP** (not `127.0.0.1`). Same Wi‑Fi / Ethernet LAN required.
+4. Optional CLI: `./PongClient -serverIP 192.168.1.42 -serverPort 25000`
+
+**Common mistakes:** wrong IP baked into the build, `127.0.0.1` on a remote PC,
+host firewall blocking 25000, server not started before clients.
 
 ## Building a headless server
 
@@ -66,11 +78,11 @@ The course allows a headless (no-GUI) server.
 
 ```
 client -> server:
-  PADDLE <y>
+  PADDLE <arcOffsetRadians>
 
 server -> client:
   ASSIGN <lineIndex> <lineCount>
-  STATE  <ballX> <ballY> <y0> <y1> ... <yN-1>
+  STATE  <ballX> <ballY> <offset0> <offset1> ... <offsetN-1>
   SCORE  <lineIndex> <score>
   DAMAGE <lineIndex> <state>     (state: 0=Intact, 1=Scattered, 2=Broken)
   WIN    <lineIndex>
@@ -86,8 +98,8 @@ bytes in `PongMessageBuffer` and yields complete `\n`-terminated lines.
   same server loop generalizes from 2 lines to N.
 - `STATE` carries N paddle Ys; `ASSIGN` carries the line count so clients can
   size their score table.
-- `PongBootstrap.LineCount` builds N visual paddle Transforms; replace
-  `ComputeLineXs` with a polygon-arena layout for a true N-sided arena.
+- Platforms are created dynamically (`ROSTER`): one bar per connected player.
+  Shared geometry lives in `CircleArenaConfig` (radius, ring bounds, platform arc).
 
 ## Milestone 2 hooks (already in place)
 

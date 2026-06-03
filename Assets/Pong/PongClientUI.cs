@@ -73,8 +73,9 @@ public class PongClientUI : MonoBehaviour
     public void Connect()
     {
         if (Client == null) return;
-        if (InpIP != null) Client.DestinationIP = InpIP.text;
+        if (InpIP != null) Client.DestinationIP = PongNetworkUtil.NormalizeIp(InpIP.text);
         if (InpPort != null && int.TryParse(InpPort.text, out int port)) Client.DestinationPort = port;
+        Client.Close();
         Client.Connect();
     }
 

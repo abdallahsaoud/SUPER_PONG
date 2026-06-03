@@ -154,7 +154,6 @@ MonoBehaviour:
   PaddleLineX: 5
   PaddleSize: {x: 0.3, y: 2}
   BallSize: 0.5
-  LineCount: 2
   DefaultServerIP: 127.0.0.1
   DefaultPort: 25000
   AutoStart: 1

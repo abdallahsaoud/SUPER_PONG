@@ -1,58 +1,34 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-/// <summary>
-/// Client-side view: positions the ball and all paddles from server STATE
-/// messages, with simple linear interpolation to smooth network jitter.
-///
-/// The locally-owned paddle is NOT smoothed against the server value - it is
-/// authoritative on the client side for zero input lag (the server still has
-/// the final say if it clamps differently, but it usually agrees). The owner's
-/// PongNetPaddle moves the transform directly each frame.
-///
-/// Arena geometry is decided on the server. This script uses an inspector list
-/// of paddle Transforms in the same order as the server's Lines list so that
-/// STATE[i] -> Paddles[i].
-/// </summary>
 public class PongNetView : MonoBehaviour
 {
-    [Tooltip("Client component receiving messages from the server.")]
     public PongClient Client;
-
-    [Tooltip("Ball visual to position from STATE.")]
     public Transform Ball;
+    public PongCircleArena CircleArena;
 
-    [Tooltip("Paddle Transforms in the same order as the server's Lines list (index 0 = line 0, etc.).")]
-    public Transform[] Paddles;
-
-    [Tooltip("Interpolation factor per second (higher = snappier, lower = smoother).")]
     public float InterpolationRate = 18f;
-    [Tooltip("Enable throttled client view logs for remote paddle application.")]
-    public bool DebugViewLogs = false;
-    [Tooltip("Max debug log frequency in logs/second.")]
-    public float DebugLogRate = 1f;
 
-    [Header("Damage visuals (Milestone 2)")]
-    public Color IntactColor    = Color.white;
-    public Color ScatteredColor = new Color(1f, 0.55f, 0.1f);
-    public Color BrokenColor    = new Color(0.3f, 0.3f, 0.3f, 0.25f);
+    public Color ScatteredColor = new Color(1f, 0.55f, 0.1f, 0.85f);
 
     Vector3? _targetBall;
-    float[] _targetPaddleY;
-    int[]   _lineHealth; // 0=Intact, 1=Scattered, 2=Broken
+    float[] _targetAngles;
+    float[] _displayAngles;
+    int[] _lineHealth;
     PongClient _subscribedClient;
-    float _nextDebugViewLogTime;
+    PongNetPaddle _localPaddle;
+    int _lastSyncedLineIndex = -2;
 
     void OnEnable()
     {
+        _localPaddle = GetComponent<PongNetPaddle>();
+    }
+
+    /// <summary>Call after Client reference is set (OnEnable runs before Bootstrap wires Client).</summary>
+    public void ForceBindAndSync()
+    {
         BindClientEvents();
-        int n = Paddles != null ? Paddles.Length : 0;
-        _targetPaddleY = new float[n];
-        _lineHealth    = new int[n];
-        for (int i = 0; i < n; i++) {
-            _targetPaddleY[i] = Paddles[i] != null ? Paddles[i].position.y : 0f;
-            ApplyLineVisual(i, 0);
-        }
+        SyncFromClientSession();
     }
 
     void OnDisable()
@@ -67,164 +43,265 @@ public class PongNetView : MonoBehaviour
         if (Client == null) return;
 
         Client.OnAssign += HandleAssign;
+        Client.OnRoster += HandleRoster;
         Client.OnState += HandleState;
         Client.OnReset += HandleReset;
         Client.OnDamage += HandleDamage;
-        Client.OnGeometry += HandleGeometry;
         _subscribedClient = Client;
     }
 
     void UnbindClientEvents()
     {
         if (_subscribedClient == null) return;
-
         _subscribedClient.OnAssign -= HandleAssign;
+        _subscribedClient.OnRoster -= HandleRoster;
         _subscribedClient.OnState -= HandleState;
         _subscribedClient.OnReset -= HandleReset;
         _subscribedClient.OnDamage -= HandleDamage;
-        _subscribedClient.OnGeometry -= HandleGeometry;
         _subscribedClient = null;
     }
 
-    void HandleGeometry(System.Collections.Generic.IList<float> lineXs)
+    void HandleAssign(int lineIndex, int lineCount)
     {
-        if (Paddles == null) return;
-        int n = Mathf.Min(lineXs.Count, Paddles.Length);
-        for (int i = 0; i < n; i++) {
-            if (Paddles[i] == null) continue;
-            var p = Paddles[i].position;
-            p.x = lineXs[i]; // snap X (server-authoritative); Y stays smoothed from STATE
-            Paddles[i].position = p;
+        EnsurePlatformCount(lineCount);
+        ResizeLineBuffers(lineCount);
+        _lastSyncedLineIndex = lineIndex;
+        if (_localPaddle != null && lineIndex >= 0) {
+            float angle = CircleArenaConfig.GetInitialAngleRad(lineIndex, lineCount);
+            if (lineIndex < _targetAngles.Length) {
+                _targetAngles[lineIndex] = angle;
+                _displayAngles[lineIndex] = angle;
+            }
+            _localPaddle.SyncAngleFromServer(angle);
+        }
+        ApplyAllPlatformPoses();
+        RefreshAllPlatformVisuals();
+    }
+
+    void HandleRoster(int lineCount)
+    {
+        EnsurePlatformCount(lineCount);
+        ResizeLineBuffers(lineCount);
+        SyncLocalPlatformAfterRoster(lineCount);
+        ApplyAllPlatformPoses();
+        RefreshAllPlatformVisuals();
+    }
+
+    void SyncFromClientSession()
+    {
+        if (Client == null) return;
+        if (Client.LastRosterCount > 0) {
+            HandleRoster(Client.LastRosterCount);
+        }
+        if (Client.LineIndex >= 0) {
+            _lastSyncedLineIndex = Client.LineIndex;
+            HandleAssign(Client.LineIndex, Client.LineCount);
         }
     }
 
-    void HandleAssign(int lineIndex, int lineCount) { /* nothing per-assign for now */ }
+    void SyncLocalPlatformAfterRoster(int lineCount)
+    {
+        if (Client == null || Client.LineIndex < 0 || _localPaddle == null) return;
+        int idx = Client.LineIndex;
+        float angle = CircleArenaConfig.GetInitialAngleRad(idx, lineCount);
+        if (_targetAngles != null && idx < _targetAngles.Length) {
+            angle = _targetAngles[idx];
+        }
+        _localPaddle.SyncAngleFromServer(angle);
+    }
 
     void HandleReset()
     {
-        // Ball will jump to new serve via next STATE; nothing else to do.
         _targetBall = null;
+        if (_lineHealth == null || CircleArena == null) return;
+
+        for (int i = 0; i < _lineHealth.Length; i++) {
+            _lineHealth[i] = 0;
+            CircleArena.SetPlatformActive(i, true);
+        }
+        ApplyAllPlatformPoses();
+        RefreshAllPlatformVisuals();
     }
 
     void HandleDamage(int lineIndex, int state)
     {
-        if (Paddles == null) return;
-        if (lineIndex < 0 || lineIndex >= Paddles.Length) return;
-        if (_lineHealth == null || _lineHealth.Length != Paddles.Length) _lineHealth = new int[Paddles.Length];
+        if (CircleArena == null) return;
+        if (lineIndex < 0) return;
+        if (_lineHealth == null || lineIndex >= _lineHealth.Length) return;
+
         _lineHealth[lineIndex] = state;
-        ApplyLineVisual(lineIndex, state);
+        bool eliminated = state >= 2;
+        CircleArena.SetPlatformActive(lineIndex, !eliminated);
+        if (!eliminated) ApplyLineVisual(lineIndex);
     }
 
-    void ApplyLineVisual(int lineIndex, int state)
-    {
-        if (Paddles == null || lineIndex < 0 || lineIndex >= Paddles.Length) return;
-        var t = Paddles[lineIndex];
-        if (t == null) return;
-        var renderer = t.GetComponent<Renderer>();
-        if (renderer == null) return;
-
-        switch (state) {
-            case 0: SetColor(renderer, IntactColor);    SetActiveSafe(t, true); break;
-            case 1: SetColor(renderer, ScatteredColor); SetActiveSafe(t, true); break;
-            default:
-                // Broken: keep the transform alive (so STATE indexing stays stable)
-                // but hide the visual via transparent color or deactivation.
-                SetColor(renderer, BrokenColor);
-                break;
-        }
-    }
-
-    static void SetColor(Renderer r, Color c)
-    {
-        // Use a per-instance MaterialPropertyBlock when possible to avoid leaking material instances.
-        var mat = r.material;
-        if (mat != null) mat.color = c;
-    }
-
-    static void SetActiveSafe(Transform t, bool active)
-    {
-        if (t.gameObject.activeSelf != active) t.gameObject.SetActive(active);
-    }
-
-    void HandleState(Vector2 ballPos, IList<float> paddleYs)
+    void HandleState(Vector2 ballPos, IList<float> paddleAngles)
     {
         _targetBall = new Vector3(ballPos.x, ballPos.y, Ball != null ? Ball.position.z : 0f);
 
-        if (Paddles == null || Paddles.Length == 0) return;
-        if (_targetPaddleY == null || _targetPaddleY.Length != Paddles.Length) {
-            _targetPaddleY = new float[Paddles.Length];
+        if (paddleAngles == null) return;
+
+        if (CircleArena != null && CircleArena.Paddles.Length != paddleAngles.Count) {
+            EnsurePlatformCount(paddleAngles.Count);
         }
 
-        int n = Mathf.Min(paddleYs.Count, Paddles.Length);
-        for (int i = 0; i < n; i++) _targetPaddleY[i] = paddleYs[i];
+        if (_targetAngles == null || _targetAngles.Length != paddleAngles.Count) {
+            ResizeLineBuffers(paddleAngles.Count);
+        }
+
+        int n = Mathf.Min(paddleAngles.Count, _targetAngles.Length);
+        for (int i = 0; i < n; i++) _targetAngles[i] = paddleAngles[i];
+    }
+
+    void EnsurePlatformCount(int count)
+    {
+        if (CircleArena == null) return;
+        if (CircleArena.Paddles == null || CircleArena.Paddles.Length != count) {
+            CircleArena.SetPlatformCount(count);
+        }
+    }
+
+    void ResizeLineBuffers(int count)
+    {
+        var newTarget = new float[count];
+        var newDisplay = new float[count];
+        var newHealth = new int[count];
+
+        int copy = _targetAngles != null ? Mathf.Min(_targetAngles.Length, count) : 0;
+        for (int i = 0; i < copy; i++) {
+            newTarget[i] = _targetAngles[i];
+            newDisplay[i] = _displayAngles != null ? _displayAngles[i] : _targetAngles[i];
+            newHealth[i] = _lineHealth != null ? _lineHealth[i] : 0;
+        }
+
+        for (int i = copy; i < count; i++) {
+            float angle = CircleArenaConfig.GetInitialAngleRad(i, count);
+            newTarget[i] = angle;
+            newDisplay[i] = angle;
+            newHealth[i] = 0;
+        }
+
+        _targetAngles = newTarget;
+        _displayAngles = newDisplay;
+        _lineHealth = newHealth;
+    }
+
+    void ApplyAllPlatformPoses()
+    {
+        if (CircleArena == null || _displayAngles == null) return;
+        var paddles = CircleArena.Paddles;
+        int n = Mathf.Min(paddles.Length, _displayAngles.Length);
+        for (int i = 0; i < n; i++) {
+            CircleArena.UpdatePlatformAngle(i, _displayAngles[i]);
+        }
+    }
+
+    void ApplyLineVisual(int lineIndex)
+    {
+        if (CircleArena == null) return;
+        var line = CircleArena.GetPlatformLine(lineIndex);
+        if (line == null || !line.gameObject.activeSelf) return;
+
+        int ownedLine = Client != null ? Client.LineIndex : -1;
+        bool isLocal = lineIndex == ownedLine;
+        Color color = isLocal
+            ? CircleArenaConfig.LocalPlatformColor
+            : CircleArenaConfig.RemotePlatformColor;
+
+        if (_lineHealth != null && lineIndex < _lineHealth.Length && _lineHealth[lineIndex] == 1) {
+            color = ScatteredColor;
+        }
+
+        CircleArenaConfig.SetArcPlatformColor(line, color);
     }
 
     void Update()
     {
-        // PongBootstrap assigns Client after AddComponent, so rebind lazily.
         BindClientEvents();
 
-        float t = 1f - Mathf.Exp(-InterpolationRate * Time.deltaTime); // frame-rate independent lerp
+        if (Client != null && Client.LineIndex != _lastSyncedLineIndex) {
+            if (Client.LineIndex >= 0) {
+                HandleAssign(Client.LineIndex, Client.LineCount);
+            } else {
+                _lastSyncedLineIndex = -1;
+            }
+        }
+
+        if (CircleArena == null) return;
+
+        float t = 1f - Mathf.Exp(-InterpolationRate * Time.deltaTime);
 
         if (Ball != null && _targetBall.HasValue) {
             Ball.position = Vector3.Lerp(Ball.position, _targetBall.Value, t);
         }
 
-        if (Paddles == null || Paddles.Length == 0) return;
-
-        // Resize target buffers lazily. OnEnable runs at AddComponent time, before
-        // PongBootstrap has assigned Paddles, so the initial size can be 0.
-        if (_targetPaddleY == null || _targetPaddleY.Length != Paddles.Length) {
-            var resizedY = new float[Paddles.Length];
-            int copyY = _targetPaddleY != null ? Mathf.Min(_targetPaddleY.Length, resizedY.Length) : 0;
-            for (int i = 0; i < copyY; i++) resizedY[i] = _targetPaddleY[i];
-            // Initialize new slots from the current paddle Y so we don't snap to 0.
-            for (int i = copyY; i < resizedY.Length; i++) {
-                resizedY[i] = Paddles[i] != null ? Paddles[i].position.y : 0f;
-            }
-            _targetPaddleY = resizedY;
-        }
-        if (_lineHealth == null || _lineHealth.Length != Paddles.Length) {
-            var resizedH = new int[Paddles.Length];
-            int copyH = _lineHealth != null ? Mathf.Min(_lineHealth.Length, resizedH.Length) : 0;
-            for (int i = 0; i < copyH; i++) resizedH[i] = _lineHealth[i];
-            _lineHealth = resizedH;
-        }
+        if (_targetAngles == null || _displayAngles == null) return;
+        var paddles = CircleArena.Paddles;
+        if (paddles.Length == 0) return;
+        if (_targetAngles.Length != paddles.Length) return;
 
         int ownedLine = Client != null ? Client.LineIndex : -1;
-        for (int i = 0; i < Paddles.Length; i++) {
-            if (Paddles[i] == null) continue;
-            if (i == ownedLine) continue; // local-control: don't fight the owner's input
-            Vector3 p = Paddles[i].position;
-            p.y = Mathf.Lerp(p.y, _targetPaddleY[i], t);
-            Paddles[i].position = p;
-        }
+        for (int i = 0; i < paddles.Length; i++) {
+            if (paddles[i] == null || !paddles[i].gameObject.activeSelf) continue;
 
-        if (DebugViewLogs && Time.time >= _nextDebugViewLogTime) {
-            _nextDebugViewLogTime = Time.time + GetDebugInterval();
-            string remoteInfo = string.Empty;
-            for (int i = 0; i < Paddles.Length; i++) {
-                if (i == ownedLine || Paddles[i] == null) continue;
-                if (remoteInfo.Length > 0) remoteInfo += " | ";
-                remoteInfo += "line " + i + " y=" + Paddles[i].position.y.ToString("0.##")
-                    + " target=" + _targetPaddleY[i].ToString("0.##");
+            if (i == ownedLine) {
+                var ownedLineRenderer = CircleArena.GetPlatformLine(i);
+                if (ownedLineRenderer != null && _localPaddle != null) {
+                    CircleArenaConfig.UpdateArcPlatform(ownedLineRenderer, GetLocalDisplayAngle(i));
+                }
+                ApplyLineVisual(i);
+                continue;
             }
-            if (string.IsNullOrEmpty(remoteInfo)) remoteInfo = "no remote line visible yet";
-            Debug.Log("PongNetView DBG ownedLine=" + ownedLine + " :: " + remoteInfo);
+
+            _displayAngles[i] = Mathf.LerpAngle(
+                _displayAngles[i] * Mathf.Rad2Deg,
+                _targetAngles[i] * Mathf.Rad2Deg,
+                t) * Mathf.Deg2Rad;
+
+            CircleArena.UpdatePlatformAngle(i, _displayAngles[i]);
+            ApplyLineVisual(i);
         }
     }
 
-    /// <summary>Used by PongNetPaddle to find which Transform to move locally.</summary>
+    public void RefreshLocalPlatformVisual()
+    {
+        if (Client == null) return;
+        ApplyLineVisual(Client.LineIndex);
+    }
+
+    public void RefreshAllPlatformVisuals()
+    {
+        if (CircleArena == null) return;
+        for (int i = 0; i < CircleArena.Paddles.Length; i++) {
+            ApplyLineVisual(i);
+        }
+    }
+
     public Transform GetLocalPaddleTransform()
     {
-        if (Client == null) return null;
+        if (Client == null || CircleArena == null) return null;
         int idx = Client.LineIndex;
-        if (Paddles == null || idx < 0 || idx >= Paddles.Length) return null;
-        return Paddles[idx];
+        if (idx < 0 || idx >= CircleArena.Paddles.Length) return null;
+        return CircleArena.Paddles[idx];
     }
 
-    float GetDebugInterval()
+    public void SetLocalDisplayAngle(int lineIndex, float angleRad)
     {
-        return DebugLogRate > 0f ? 1f / DebugLogRate : 1f;
+        if (_displayAngles == null || lineIndex < 0 || lineIndex >= _displayAngles.Length) return;
+        _displayAngles[lineIndex] = angleRad;
+        if (_targetAngles != null && lineIndex < _targetAngles.Length) {
+            _targetAngles[lineIndex] = angleRad;
+        }
+    }
+
+    float GetLocalDisplayAngle(int lineIndex)
+    {
+        if (_localPaddle != null && Client != null && lineIndex == Client.LineIndex) {
+            return _localPaddle.CurrentAngleRad;
+        }
+        if (_displayAngles != null && lineIndex >= 0 && lineIndex < _displayAngles.Length) {
+            return _displayAngles[lineIndex];
+        }
+        return 0f;
     }
 }
