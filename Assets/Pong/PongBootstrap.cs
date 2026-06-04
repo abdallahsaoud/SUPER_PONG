@@ -73,7 +73,10 @@ public class PongBootstrap : MonoBehaviour
     {
         yield return null;
         if (View != null) View.ForceBindAndSync();
-        if (Client != null) Client.Connect();
+        if (Client != null && Client.Connect()) {
+            Client.SendName("Player");
+            Client.SendReady();
+        }
         yield return null;
         if (View != null) View.ForceBindAndSync();
     }

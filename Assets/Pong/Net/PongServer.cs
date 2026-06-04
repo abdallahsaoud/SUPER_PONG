@@ -23,6 +23,9 @@ public class PongServer : MonoBehaviour
         public PongMessageBuffer Buffer = new PongMessageBuffer();
         /// <summary>Line index assigned to this client by PongServerGame, or -1 if none.</summary>
         public int LineIndex = -1;
+        public string DisplayName = string.Empty;
+        /// <summary>False while the client is on the end-of-round menu (until READY).</summary>
+        public bool InGame = true;
     }
 
     TcpListener _tcp;

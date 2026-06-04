@@ -36,6 +36,8 @@ public class PongClient : MonoBehaviour
     public delegate void ResetHandler();
     public delegate void GeometryHandler(IList<float> lineXs);
     public delegate void RosterHandler(int lineCount);
+    public delegate void NamesHandler(IList<string> playerNames);
+    public delegate void CountdownHandler(int secondsRemaining);
 
     public AssignHandler   OnAssign;
     public RosterHandler   OnRoster;
@@ -45,6 +47,13 @@ public class PongClient : MonoBehaviour
     public WinHandler      OnWin;
     public ResetHandler    OnReset;
     public GeometryHandler OnGeometry;
+    public NamesHandler    OnNames;
+    public CountdownHandler OnCountdown;
+
+    string[] _playerNames = new string[0];
+
+    /// <summary>Seconds until the next match starts (0 = no countdown shown).</summary>
+    public int RestartCountdownSeconds { get; private set; }
 
     /// <summary>Assigned line index after ASSIGN arrives (-1 until then).</summary>
     public int LineIndex { get; private set; } = -1;
@@ -56,6 +65,46 @@ public class PongClient : MonoBehaviour
 
     /// <summary>Human-readable result of the last Connect() attempt.</summary>
     public string LastError { get; private set; } = string.Empty;
+    public string LastWinnerName { get; private set; } = string.Empty;
+
+    public string GetPlayerName(int lineIndex)
+    {
+        if (lineIndex >= 0 && lineIndex < _playerNames.Length) {
+            string name = _playerNames[lineIndex];
+            if (!string.IsNullOrEmpty(name)) return name;
+        }
+        return PongProtocol.DefaultPlayerName(lineIndex);
+    }
+
+    public void SendName(string displayName)
+    {
+        if (!IsConnected) return;
+        SendFramed(PongProtocol.FormatName(displayName));
+    }
+
+    /// <summary>True when the server counts this client toward the next match.</summary>
+    public bool ParticipatesInGame { get; private set; } = true;
+
+    public void SendReady()
+    {
+        if (!IsConnected) return;
+        ParticipatesInGame = true;
+        SendFramed(PongProtocol.FormatReady());
+    }
+
+    public void SendPostGame()
+    {
+        if (!IsConnected) return;
+        ParticipatesInGame = false;
+        SendFramed(PongProtocol.FormatPostGame());
+    }
+
+    public void SendSpectate()
+    {
+        if (!IsConnected) return;
+        ParticipatesInGame = false;
+        SendFramed(PongProtocol.FormatSpectate());
+    }
 
     public bool Connect()
     {
@@ -141,10 +190,16 @@ public class PongClient : MonoBehaviour
     void Dispatch(string message)
     {
         if (string.IsNullOrEmpty(message)) return;
+        if (!PongProtocol.TryGetMessageHead(message, out string head)) return;
+
+        if (head == PongProtocol.MsgNames) {
+            string payload = message.Substring(PongProtocol.MsgNames.Length);
+            _playerNames = PongProtocol.ParseNamesPayload(payload);
+            OnNames?.Invoke(_playerNames);
+            return;
+        }
 
         string[] parts = message.Split(PongProtocol.FieldSeparator);
-        if (parts.Length == 0) return;
-        string head = parts[0];
 
         switch (head) {
             case PongProtocol.MsgRoster: {
@@ -204,13 +259,24 @@ public class PongClient : MonoBehaviour
                 break;
             }
             case PongProtocol.MsgWin: {
-                if (parts.Length >= 2 && PongProtocol.TryParseInt(parts[1], out int idx)) {
+                if (PongProtocol.TryParseWin(message, out int idx, out string winnerName)) {
+                    LastWinnerName = string.IsNullOrEmpty(winnerName)
+                        ? GetPlayerName(idx)
+                        : winnerName;
                     OnWin?.Invoke(idx);
                 }
                 break;
             }
             case PongProtocol.MsgReset: {
+                RestartCountdownSeconds = 0;
                 OnReset?.Invoke();
+                break;
+            }
+            case PongProtocol.MsgCountdown: {
+                if (parts.Length >= 2 && PongProtocol.TryParseInt(parts[1], out int seconds)) {
+                    RestartCountdownSeconds = seconds;
+                    OnCountdown?.Invoke(seconds);
+                }
                 break;
             }
             case PongProtocol.MsgGeometry: {
@@ -232,6 +298,10 @@ public class PongClient : MonoBehaviour
         LineIndex = -1;
         LineCount = 0;
         LastRosterCount = 0;
+        LastWinnerName = string.Empty;
+        RestartCountdownSeconds = 0;
+        ParticipatesInGame = true;
+        _playerNames = new string[0];
     }
 
     float GetDebugInterval()

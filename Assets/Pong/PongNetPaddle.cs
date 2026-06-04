@@ -18,7 +18,7 @@ public class PongNetPaddle : MonoBehaviour
     void Update()
     {
         if (Client == null || View == null) return;
-        if (!Client.IsConnected || Client.LineIndex < 0) return;
+        if (!Client.IsConnected || !Client.ParticipatesInGame || Client.LineIndex < 0) return;
 
         int idx = Client.LineIndex;
         if (View.CircleArena == null) return;
