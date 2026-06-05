@@ -3,11 +3,26 @@ using System.Collections.Generic;
 
 public class PongNetView : MonoBehaviour
 {
+    const int HealthEliminated = 2;
+
     public PongClient Client;
     public Transform Ball;
     public PongCircleArena CircleArena;
 
     public float InterpolationRate = 18f;
+
+    public bool IsLineEliminated(int lineIndex)
+    {
+        return _lineHealth != null
+            && lineIndex >= 0
+            && lineIndex < _lineHealth.Length
+            && _lineHealth[lineIndex] >= HealthEliminated;
+    }
+
+    public bool IsLocalPlayerEliminated()
+    {
+        return Client != null && Client.LineIndex >= 0 && IsLineEliminated(Client.LineIndex);
+    }
 
     public Color ScatteredColor = new Color(1f, 0.55f, 0.1f, 0.85f);
 

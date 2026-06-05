@@ -12,6 +12,7 @@ public class PongClientUI : MonoBehaviour
     public PongClient Client;
 
     [Header("Connect panel")]
+    public TMPro.TMP_InputField InpPlayerName;
     public TMPro.TMP_InputField InpIP;
     public TMPro.TMP_InputField InpPort;
     public GameObject ConnectPanel;
@@ -25,6 +26,14 @@ public class PongClientUI : MonoBehaviour
     public GameObject WinPanel;
     public TMPro.TMP_Text TxtWin;
 
+    [Header("Lost panel")]
+    public GameObject LostPanel;
+    public TMPro.TMP_Text TxtLost;
+
+    [Header("Lobby")]
+    public GameObject AwaitingPanel;
+    public TMPro.TMP_Text TxtRestartCountdown;
+
     int[] _scores = new int[0];
     int _myLine = -1;
     int _lineCount = 0;
@@ -36,13 +45,18 @@ public class PongClientUI : MonoBehaviour
             if (InpPort != null) InpPort.text = Client.DestinationPort.ToString();
         }
         if (WinPanel != null) WinPanel.SetActive(false);
+        if (LostPanel != null) LostPanel.SetActive(false);
+        if (AwaitingPanel != null) AwaitingPanel.SetActive(false);
     }
 
     void OnEnable()
     {
         if (Client == null) return;
         Client.OnAssign += HandleAssign;
+        Client.OnRoster += HandleRoster;
+        Client.OnCountdown += HandleCountdown;
         Client.OnScore += HandleScore;
+        Client.OnDamage += HandleDamage;
         Client.OnWin += HandleWin;
         Client.OnReset += HandleReset;
     }
@@ -51,7 +65,10 @@ public class PongClientUI : MonoBehaviour
     {
         if (Client == null) return;
         Client.OnAssign -= HandleAssign;
+        Client.OnRoster -= HandleRoster;
+        Client.OnCountdown -= HandleCountdown;
         Client.OnScore -= HandleScore;
+        Client.OnDamage -= HandleDamage;
         Client.OnWin -= HandleWin;
         Client.OnReset -= HandleReset;
     }
@@ -62,12 +79,54 @@ public class PongClientUI : MonoBehaviour
         bool connected = Client.IsConnected;
         if (ConnectPanel != null) ConnectPanel.SetActive(!connected);
         if (GamePanel != null) GamePanel.SetActive(connected);
+        RefreshAwaitingPanel(connected);
+        RefreshRestartCountdown(connected);
         if (TxtStatus != null) {
-            TxtStatus.text = connected
-                ? ("Connected as line " + (_myLine >= 0 ? _myLine.ToString() : "?"))
-                : "Not connected";
+            if (!connected) {
+                TxtStatus.text = "Not connected";
+            } else if (IsAwaitingMorePlayers()) {
+                TxtStatus.text = "Awaiting more players to start…";
+            } else {
+                TxtStatus.text = "Connected as " + (Client != null && _myLine >= 0
+                    ? Client.GetPlayerName(_myLine)
+                    : "?");
+            }
         }
         RefreshScores();
+    }
+
+    void HandleRoster(int lineCount)
+    {
+        _lineCount = lineCount;
+        RefreshAwaitingPanel(Client != null && Client.IsConnected);
+    }
+
+    bool IsAwaitingMorePlayers()
+    {
+        return _lineCount > 0 && _lineCount < 2;
+    }
+
+    void RefreshAwaitingPanel(bool connected)
+    {
+        if (AwaitingPanel == null) return;
+        bool show = connected && IsAwaitingMorePlayers()
+            && (WinPanel == null || !WinPanel.activeSelf)
+            && (LostPanel == null || !LostPanel.activeSelf);
+        AwaitingPanel.SetActive(show);
+    }
+
+    void HandleCountdown(int secondsRemaining) => RefreshRestartCountdown(Client != null && Client.IsConnected);
+
+    void RefreshRestartCountdown(bool connected)
+    {
+        int seconds = connected && Client != null ? Client.RestartCountdownSeconds : 0;
+        if (TxtRestartCountdown == null) return;
+        if (seconds <= 0) {
+            TxtRestartCountdown.gameObject.SetActive(false);
+            return;
+        }
+        TxtRestartCountdown.gameObject.SetActive(true);
+        TxtRestartCountdown.text = "Next match in " + seconds + "…";
     }
 
     public void Connect()
@@ -76,7 +135,11 @@ public class PongClientUI : MonoBehaviour
         if (InpIP != null) Client.DestinationIP = PongNetworkUtil.NormalizeIp(InpIP.text);
         if (InpPort != null && int.TryParse(InpPort.text, out int port)) Client.DestinationPort = port;
         Client.Close();
-        Client.Connect();
+        if (Client.Connect()) {
+            string name = InpPlayerName != null ? InpPlayerName.text : string.Empty;
+            Client.SendName(name);
+            Client.SendReady();
+        }
     }
 
     public void Disconnect()
@@ -98,6 +161,15 @@ public class PongClientUI : MonoBehaviour
         _lineCount = lineCount;
         if (_scores.Length != lineCount) _scores = new int[lineCount];
         if (WinPanel != null) WinPanel.SetActive(false);
+        if (LostPanel != null) LostPanel.SetActive(false);
+        RefreshAwaitingPanel(Client != null && Client.IsConnected);
+    }
+
+    void HandleDamage(int lineIndex, int state)
+    {
+        if (lineIndex != _myLine || state < 2) return;
+        if (Client != null) Client.SendPostGame();
+        ShowLostPanel();
     }
 
     void HandleScore(int lineIndex, int score)
@@ -112,16 +184,39 @@ public class PongClientUI : MonoBehaviour
 
     void HandleWin(int lineIndex)
     {
+        if (AwaitingPanel != null) AwaitingPanel.SetActive(false);
+        if (Client != null) Client.SendPostGame();
+        if (lineIndex == _myLine) {
+            if (LostPanel != null) LostPanel.SetActive(false);
+            if (WinPanel != null) WinPanel.SetActive(true);
+            if (TxtWin != null) TxtWin.text = "You win!";
+            return;
+        }
+
+        ShowLostPanel();
         if (WinPanel != null) WinPanel.SetActive(true);
         if (TxtWin != null) {
-            string who = (lineIndex == _myLine) ? "You win!" : ("Line " + lineIndex + " wins!");
-            TxtWin.text = who;
+            string who = Client != null && !string.IsNullOrEmpty(Client.LastWinnerName)
+                ? Client.LastWinnerName
+                : (Client != null
+                    ? Client.GetPlayerName(lineIndex)
+                    : PongProtocol.DefaultPlayerName(lineIndex));
+            TxtWin.text = who + " wins!";
         }
     }
 
     void HandleReset()
     {
         if (WinPanel != null) WinPanel.SetActive(false);
+        if (LostPanel != null) LostPanel.SetActive(false);
+        RefreshAwaitingPanel(Client != null && Client.IsConnected);
+        RefreshRestartCountdown(Client != null && Client.IsConnected);
+    }
+
+    void ShowLostPanel()
+    {
+        if (LostPanel != null) LostPanel.SetActive(true);
+        if (TxtLost != null) TxtLost.text = "You've lost";
     }
 
     void RefreshScores()

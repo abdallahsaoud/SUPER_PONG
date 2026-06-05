@@ -78,15 +78,18 @@ The course allows a headless (no-GUI) server.
 
 ```
 client -> server:
+  NAME <displayName>
   PADDLE <arcOffsetRadians>
 
 server -> client:
   ASSIGN <lineIndex> <lineCount>
+  NAMES <name0><tab><name1>...
   STATE  <ballX> <ballY> <offset0> <offset1> ... <offsetN-1>
   SCORE  <lineIndex> <score>
   DAMAGE <lineIndex> <state>     (state: 0=Intact, 1=Scattered, 2=Broken)
-  WIN    <lineIndex>
+  WIN    <lineIndex> <winnerName>
   RESET
+  COUNTDOWN <secondsRemaining>
 ```
 
 All messages end with `\n`. TCP is a byte stream, so the receive side accumulates

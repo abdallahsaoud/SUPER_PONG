@@ -22,6 +22,10 @@ public class PongServerGame : MonoBehaviour
     public bool DebugNetworkLogs = false;
     public float DebugLogRate = 1f;
 
+    [Header("Post-round lobby")]
+    [Tooltip("After a 2-player round ends, wait this long for more players before the next match.")]
+    public float PostRoundLobbySeconds = 10f;
+
     public List<LineConfig> Lines = new List<LineConfig>();
 
     [System.Serializable]
@@ -36,6 +40,7 @@ public class PongServerGame : MonoBehaviour
         public PongServer.ClientConnection Owner;
         public float RingAngleRad;
         public int Health;
+        public string DisplayName = string.Empty;
     }
 
     public enum BallState { WaitingForPlayers, Playing, Won }
@@ -47,6 +52,8 @@ public class PongServerGame : MonoBehaviour
     BallState _state = BallState.WaitingForPlayers;
     int _winnerLine = -1;
     float _stateAccumulator;
+    float _postRoundLobbyRemaining;
+    int _lastBroadcastCountdown = -1;
     float _nextDebugPaddleLogTime;
     float _nextDebugStateLogTime;
 
@@ -120,18 +127,21 @@ public class PongServerGame : MonoBehaviour
         if (!_server.IsListening) return;
         EnsureRuntime();
         float dt = Time.unscaledDeltaTime;
-        int playingCount = GetAliveAssignedCount();
+        int connectedCount = GetAssignedCount();
+        int inGameCount = GetInGameCount();
 
-        if (playingCount < MinPlayersToPlay) {
+        if (connectedCount < MinPlayersToPlay) {
             if (_state != BallState.WaitingForPlayers) {
                 EnterWaitingForPlayers("not enough players");
             }
-        } else if (_state == BallState.WaitingForPlayers) {
+        } else if (_state == BallState.WaitingForPlayers && inGameCount >= MinPlayersToPlay) {
             StartMatch();
         }
 
         if (_state == BallState.Playing) {
             StepBall(dt);
+        } else if (_state == BallState.Won) {
+            TickPostRoundLobby(dt, connectedCount, inGameCount);
         }
 
         _stateAccumulator += dt;
@@ -161,10 +171,18 @@ public class PongServerGame : MonoBehaviour
         rt.Assigned = true;
         rt.Owner = client;
         rt.Health = HealthAlive;
+        rt.DisplayName = ResolveDisplayName(client, idx);
         RespreadPlayerAngles();
 
         BroadcastRosterAndAssign();
-        Debug.Log("PongServerGame: player joined line " + idx + " (total " + Lines.Count + ").");
+        Debug.Log("PongServerGame: " + rt.DisplayName + " joined line " + idx + " (total " + Lines.Count + ").");
+
+        if (_state == BallState.Won) {
+            TryStartMatchWhenReady();
+            if (_postRoundLobbyRemaining > 0f) {
+                _server.Send(client, PongProtocol.FormatCountdown(GetPostRoundCountdownSeconds()));
+            }
+        }
     }
 
     void HandleClientDisconnected(PongServer.ClientConnection client)
@@ -200,7 +218,23 @@ public class PongServerGame : MonoBehaviour
         string head = sp < 0 ? message : message.Substring(0, sp);
         string tail = sp < 0 ? string.Empty : message.Substring(sp + 1);
 
+        if (head == PongProtocol.MsgName) {
+            ApplyClientDisplayName(client, tail);
+            return;
+        }
+
+        if (head == PongProtocol.MsgReady) {
+            SetClientInGame(client, true);
+            return;
+        }
+
+        if (head == PongProtocol.MsgPostGame || head == PongProtocol.MsgSpectate) {
+            SetClientInGame(client, false);
+            return;
+        }
+
         if (head == PongProtocol.MsgPaddle) {
+            if (!client.InGame) return;
             if (PongProtocol.TryParseFloat(tail, out float angleRad)) {
                 if (client.LineIndex >= 0 && client.LineIndex < _runtime.Length) {
                     var rt = _runtime[client.LineIndex];
@@ -236,6 +270,8 @@ public class PongServerGame : MonoBehaviour
 
     void StartMatch()
     {
+        _postRoundLobbyRemaining = 0f;
+        BroadcastCountdown(0);
         for (int i = 0; i < _runtime.Length; i++) {
             _runtime[i].Health = HealthAlive;
         }
@@ -244,9 +280,93 @@ public class PongServerGame : MonoBehaviour
         ServeBall();
     }
 
+    void BeginPostRoundLobby()
+    {
+        _postRoundLobbyRemaining = PostRoundLobbySeconds > 0f ? PostRoundLobbySeconds : 10f;
+        _lastBroadcastCountdown = -1;
+        BroadcastCountdown(GetPostRoundCountdownSeconds());
+        Debug.Log("PongServerGame: waiting " + _postRoundLobbyRemaining.ToString("0.#")
+            + "s for more players before next match.");
+    }
+
+    void ScheduleNextMatchAfterWin()
+    {
+        int connectedCount = GetAssignedCount();
+        if (connectedCount < MinPlayersToPlay) {
+            EnterWaitingForPlayers("not enough players after win");
+            return;
+        }
+
+        if (connectedCount == MinPlayersToPlay) {
+            BeginPostRoundLobby();
+            TryStartMatchWhenReady();
+            return;
+        }
+
+        TryStartMatchWhenReady();
+    }
+
+    void TickPostRoundLobby(float dt, int connectedCount, int inGameCount)
+    {
+        if (connectedCount < MinPlayersToPlay) {
+            EnterWaitingForPlayers("not enough players");
+            return;
+        }
+
+        if (inGameCount >= MinPlayersToPlay) {
+            StartMatch();
+            return;
+        }
+
+        _postRoundLobbyRemaining -= dt;
+        BroadcastCountdown(GetPostRoundCountdownSeconds());
+    }
+
+    void SetClientInGame(PongServer.ClientConnection client, bool inGame)
+    {
+        if (client.InGame == inGame) return;
+        client.InGame = inGame;
+        string who = client.LineIndex >= 0
+            ? ResolveDisplayName(client, client.LineIndex)
+            : PongProtocol.SanitizePlayerName(client.DisplayName);
+        if (string.IsNullOrEmpty(who)) who = "Player";
+        Debug.Log("PongServerGame: " + who
+            + (inGame ? " joined the queue." : " left the queue (post-game menu / spectating)."));
+        TryStartMatchWhenReady();
+    }
+
+    void TryStartMatchWhenReady()
+    {
+        if (GetInGameCount() < MinPlayersToPlay) return;
+
+        if (_state == BallState.WaitingForPlayers) {
+            StartMatch();
+            return;
+        }
+
+        if (_state == BallState.Won) {
+            StartMatch();
+        }
+    }
+
+    int GetPostRoundCountdownSeconds()
+    {
+        if (_postRoundLobbyRemaining <= 0f) return 0;
+        return Mathf.CeilToInt(_postRoundLobbyRemaining);
+    }
+
+    void BroadcastCountdown(int seconds)
+    {
+        if (seconds == _lastBroadcastCountdown) return;
+        _lastBroadcastCountdown = seconds;
+        _server.Broadcast(PongProtocol.FormatCountdown(seconds));
+    }
+
     void EnterWaitingForPlayers(string reason)
     {
         CancelInvoke(nameof(ServeBall));
+        _postRoundLobbyRemaining = 0f;
+        BroadcastCountdown(0);
         _state = BallState.WaitingForPlayers;
         _winnerLine = -1;
         _ballPos = BallStart;
@@ -300,12 +420,41 @@ public class PongServerGame : MonoBehaviour
     {
         int count = Lines.Count;
         _server.Broadcast(PongProtocol.FormatRoster(count));
+        BroadcastNames();
 
         for (int i = 0; i < _runtime.Length; i++) {
             var rt = _runtime[i];
             if (!rt.Assigned || rt.Owner == null) continue;
             _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count));
         }
+    }
+
+    void BroadcastNames()
+    {
+        if (_runtime == null || _runtime.Length == 0) return;
+        var names = new string[_runtime.Length];
+        for (int i = 0; i < _runtime.Length; i++) {
+            names[i] = _runtime[i].DisplayName;
+        }
+        _server.Broadcast(PongProtocol.FormatNames(names));
+    }
+
+    void ApplyClientDisplayName(PongServer.ClientConnection client, string rawName)
+    {
+        string safe = PongProtocol.SanitizePlayerName(rawName);
+        if (string.IsNullOrEmpty(safe)) return;
+
+        client.DisplayName = safe;
+        if (client.LineIndex >= 0 && client.LineIndex < _runtime.Length) {
+            _runtime[client.LineIndex].DisplayName = safe;
+            BroadcastNames();
+        }
+    }
+
+    static string ResolveDisplayName(PongServer.ClientConnection client, int lineIndex)
+    {
+        string safe = PongProtocol.SanitizePlayerName(client.DisplayName);
+        return string.IsNullOrEmpty(safe) ? PongProtocol.DefaultPlayerName(lineIndex) : safe;
     }
 
     void EliminatePlayer(int lineIndex)
@@ -333,9 +482,13 @@ public class PongServerGame : MonoBehaviour
             _state = BallState.Won;
             _winnerLine = lastAlive;
             if (lastAlive >= 0) {
-                _server.Broadcast(PongProtocol.FormatWin(lastAlive));
+                string winnerName = lastAlive < _runtime.Length
+                    ? _runtime[lastAlive].DisplayName
+                    : string.Empty;
+                _server.Broadcast(PongProtocol.FormatWin(lastAlive, winnerName));
             }
             Debug.Log("PongServerGame: winner line " + lastAlive);
+            ScheduleNextMatchAfterWin();
         }
     }
 
@@ -358,6 +511,18 @@ public class PongServerGame : MonoBehaviour
         int count = 0;
         for (int i = 0; i < _runtime.Length; i++) {
             if (_runtime[i].Assigned) count++;
+        }
+        return count;
+    }
+
+    int GetInGameCount()
+    {
+        if (_runtime == null) return 0;
+        int count = 0;
+        for (int i = 0; i < _runtime.Length; i++) {
+            var rt = _runtime[i];
+            if (!rt.Assigned || rt.Owner == null || !rt.Owner.InGame) continue;
+            count++;
         }
         return count;
     }

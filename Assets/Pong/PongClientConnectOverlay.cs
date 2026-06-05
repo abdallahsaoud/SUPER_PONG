@@ -1,11 +1,16 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
 /// Simple connect screen for player builds (no TMP UI required).
-/// Shown until TCP connection succeeds.
+/// Shown until TCP connection succeeds. While connected, shows "You've lost" and
+/// "Match over" panels when the local player is eliminated or the round ends.
 /// </summary>
 public class PongClientConnectOverlay : MonoBehaviour
 {
+    const int HealthEliminated = 2;
+    const int MinPlayersToStart = 2;
+
     public PongClient Client;
     public PongNetView View;
 
@@ -17,13 +22,25 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     string _ip = string.Empty;
     string _portText = PongNetworkUtil.DefaultPort.ToString();
+    string _playerName = "Player";
     string _status = "Not connected";
     bool _stylesReady;
+
+    bool _lost;
+    bool _matchOver;
+    bool _spectating;
+    int _winnerLine = -1;
+    string _winnerName = string.Empty;
+    int _restartCountdownSeconds;
+    bool _postGameSent;
+
+    PongClient _boundClient;
 
     GUIStyle _boxStyle;
     GUIStyle _labelStyle;
     GUIStyle _fieldStyle;
     GUIStyle _buttonStyle;
+    GUIStyle _titleStyle;
 
     public void Initialize(PongClient client, PongNetView view, string defaultIp, int defaultPort)
     {
@@ -31,31 +48,241 @@ public class PongClientConnectOverlay : MonoBehaviour
         View = view;
         _ip = PongNetworkUtil.NormalizeIp(defaultIp);
         _portText = defaultPort.ToString();
+        BindClientEvents();
+    }
+
+    void OnEnable() => BindClientEvents();
+
+    void OnDisable() => UnbindClientEvents();
+
+    void BindClientEvents()
+    {
+        if (_boundClient == Client) return;
+        UnbindClientEvents();
+        if (Client == null) return;
+
+        Client.OnDamage += HandleDamage;
+        Client.OnWin += HandleWin;
+        Client.OnReset += HandleReset;
+        Client.OnAssign += HandleAssign;
+        Client.OnNames += HandleNames;
+        Client.OnCountdown += HandleCountdown;
+        _boundClient = Client;
+    }
+
+    void UnbindClientEvents()
+    {
+        if (_boundClient == null) return;
+        _boundClient.OnDamage -= HandleDamage;
+        _boundClient.OnWin -= HandleWin;
+        _boundClient.OnReset -= HandleReset;
+        _boundClient.OnAssign -= HandleAssign;
+        _boundClient.OnNames -= HandleNames;
+        _boundClient.OnCountdown -= HandleCountdown;
+        _boundClient = null;
+    }
+
+    void ClearMatchUiState()
+    {
+        _lost = false;
+        _matchOver = false;
+        _spectating = false;
+        _winnerLine = -1;
+        _winnerName = string.Empty;
+        _restartCountdownSeconds = 0;
+        _postGameSent = false;
+    }
+
+    void HandleDamage(int lineIndex, int state)
+    {
+        if (state < HealthEliminated) return;
+        if (Client != null && lineIndex == Client.LineIndex) {
+            _lost = true;
+            _spectating = false;
+            NotifyPostGameMenu();
+            return;
+        }
+        SyncLostFromView();
+    }
+
+    void HandleWin(int lineIndex)
+    {
+        _winnerLine = lineIndex;
+        _winnerName = Client != null ? Client.LastWinnerName : string.Empty;
+        _matchOver = true;
+        if (Client != null && Client.LineIndex >= 0 && lineIndex != Client.LineIndex) {
+            _lost = true;
+        }
+        NotifyPostGameMenu();
+    }
+
+    void NotifyPostGameMenu()
+    {
+        if (Client == null || _postGameSent) return;
+        _postGameSent = true;
+        Client.SendPostGame();
+    }
+
+    void ConfirmReadyForNextMatch()
+    {
+        if (Client == null) return;
+        Client.SendReady();
+    }
+
+    void ConfirmSpectateOnly()
+    {
+        if (Client == null) return;
+        Client.SendSpectate();
+    }
+
+    void HandleNames(IList<string> playerNames)
+    {
+        if (_winnerLine >= 0 && Client != null) {
+            _winnerName = Client.GetPlayerName(_winnerLine);
+        }
+    }
+
+    void HandleCountdown(int secondsRemaining)
+    {
+        _restartCountdownSeconds = secondsRemaining;
+    }
+
+    void HandleReset()
+    {
+        _restartCountdownSeconds = 0;
+        if (_lost || _matchOver) return;
+        ClearMatchUiState();
+    }
+
+    void HandleAssign(int lineIndex, int lineCount)
+    {
+        // Roster rebroadcast during an active round must not dismiss the lost panel.
+        if (_matchOver) ClearMatchUiState();
+    }
+
+    void LeaveServer()
+    {
+        if (Client != null) Client.Close();
+        ClearMatchUiState();
+    }
+
+    void GoToMainMenu()
+    {
+        LeaveServer();
+        PongMainMenuNavigation.RequestMainMenu();
     }
 
     void Update()
     {
+        BindClientEvents();
         if (Client == null) return;
-        if (Client.IsConnected) {
-            _status = Client.LineIndex >= 0
-                ? "Connected (line " + Client.LineIndex + ")"
-                : "Connected, waiting for server…";
+
+        if (!Client.IsConnected) {
+            ClearMatchUiState();
+            if (!string.IsNullOrEmpty(Client.LastError)) {
+                _status = Client.LastError;
+            }
             return;
         }
 
-        if (!string.IsNullOrEmpty(Client.LastError)) {
-            _status = Client.LastError;
+        if (IsAwaitingMorePlayers()) {
+            _status = "Awaiting more players to start…";
+        } else if (Client.LineIndex >= 0) {
+            _status = "Connected as " + Client.GetPlayerName(Client.LineIndex);
+        } else {
+            _status = "Connected, waiting for server…";
         }
+
+        SyncLostFromView();
+        _restartCountdownSeconds = Client.RestartCountdownSeconds;
+    }
+
+    bool IsAwaitingMorePlayers()
+    {
+        if (Client == null || !Client.IsConnected) return false;
+        if (_matchOver) return false;
+        if (_lost && !_spectating) return false;
+        int count = Client.LineCount > 0 ? Client.LineCount : Client.LastRosterCount;
+        return count > 0 && count < MinPlayersToStart;
+    }
+
+    void SyncLostFromView()
+    {
+        if (View != null && View.IsLocalPlayerEliminated()) {
+            _lost = true;
+            if (!_spectating) NotifyPostGameMenu();
+        }
+    }
+
+    bool IsLocalWinner()
+    {
+        return Client != null && Client.LineIndex >= 0 && _winnerLine == Client.LineIndex;
     }
 
     void OnGUI()
     {
-        if (Client != null && Client.IsConnected) return;
-
         EnsureStyles();
 
+        bool connected = Client != null && Client.IsConnected;
+        if (!connected) {
+            DrawConnectPanel();
+            return;
+        }
+
+        if (_matchOver && IsLocalWinner()) {
+            DrawMatchOverPanel();
+            return;
+        }
+
+        if (_lost && !_spectating) {
+            DrawLostPanel();
+            return;
+        }
+
+        if (_matchOver) {
+            DrawMatchOverPanel();
+            return;
+        }
+
+        if (IsAwaitingMorePlayers()) {
+            DrawAwaitingPlayersPanel();
+        }
+
+        if (_restartCountdownSeconds > 0) {
+            DrawRestartCountdownPanel();
+        }
+    }
+
+    void DrawRestartCountdownPanel()
+    {
+        float w = 320f;
+        float h = 64f;
+        var rect = new Rect((Screen.width - w) * 0.5f, Screen.height * 0.2f, w, h);
+        GUI.Box(rect, string.Empty, _boxStyle);
+
+        GUILayout.BeginArea(rect);
+        GUILayout.Space(14);
+        GUILayout.Label("Next match in " + _restartCountdownSeconds + "…", _titleStyle);
+        GUILayout.EndArea();
+    }
+
+    void DrawAwaitingPlayersPanel()
+    {
+        float w = 360f;
+        float h = 72f;
+        var rect = new Rect((Screen.width - w) * 0.5f, Screen.height * 0.12f, w, h);
+        GUI.Box(rect, string.Empty, _boxStyle);
+
+        GUILayout.BeginArea(rect);
+        GUILayout.Space(18);
+        GUILayout.Label("Awaiting more players to start…", _titleStyle);
+        GUILayout.EndArea();
+    }
+
+    void DrawConnectPanel()
+    {
         float w = 420f;
-        float h = 300f;
+        float h = 340f;
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, "Connect to server", _boxStyle);
 
@@ -63,6 +290,8 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Space(28);
         GUILayout.Label(HelpText, _labelStyle);
         GUILayout.Space(8);
+        GUILayout.Label("Your name", _labelStyle);
+        _playerName = GUILayout.TextField(_playerName, _fieldStyle, GUILayout.Height(28));
         GUILayout.Label("Server IP", _labelStyle);
         _ip = GUILayout.TextField(_ip, _fieldStyle, GUILayout.Height(28));
         GUILayout.Label("Port", _labelStyle);
@@ -76,6 +305,92 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Space(6);
         GUILayout.Label(_status, _labelStyle);
         GUILayout.EndArea();
+    }
+
+    void DrawLostPanel()
+    {
+        float w = 380f;
+        float h = 268f;
+        var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+        GUI.Box(rect, string.Empty, _boxStyle);
+
+        GUILayout.BeginArea(rect);
+        GUILayout.Space(16);
+        GUILayout.Label("You've lost", _titleStyle);
+        GUILayout.Space(12);
+        GUILayout.Label(
+            "Leave the server, return to the main menu, or keep watching until this match ends.",
+            _labelStyle);
+        GUILayout.Space(16);
+
+        if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
+            LeaveServer();
+        }
+
+        GUILayout.Space(8);
+
+        if (GUILayout.Button("Main menu", _buttonStyle, GUILayout.Height(36))) {
+            GoToMainMenu();
+        }
+
+        GUILayout.Space(8);
+
+        if (GUILayout.Button("Keep watching", _buttonStyle, GUILayout.Height(36))) {
+            _spectating = true;
+            ConfirmSpectateOnly();
+        }
+
+        GUILayout.EndArea();
+    }
+
+    void DrawMatchOverPanel()
+    {
+        float w = 400f;
+        float h = 288f;
+        var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+        GUI.Box(rect, string.Empty, _boxStyle);
+
+        GUILayout.BeginArea(rect);
+        GUILayout.Space(16);
+        GUILayout.Label(GetMatchOverTitle(), _titleStyle);
+        GUILayout.Space(12);
+        GUILayout.Label(
+            "Leave the server, return to the main menu, or stay connected for the next match.",
+            _labelStyle);
+        GUILayout.Space(16);
+
+        if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
+            LeaveServer();
+        }
+
+        GUILayout.Space(8);
+
+        if (GUILayout.Button("Main menu", _buttonStyle, GUILayout.Height(36))) {
+            GoToMainMenu();
+        }
+
+        GUILayout.Space(8);
+
+        if (GUILayout.Button("Stay for next match", _buttonStyle, GUILayout.Height(36))) {
+            ConfirmReadyForNextMatch();
+            ClearMatchUiState();
+        }
+
+        GUILayout.EndArea();
+    }
+
+    string GetMatchOverTitle()
+    {
+        if (Client != null && _winnerLine == Client.LineIndex) {
+            return "Match over — You win!";
+        }
+        if (_winnerLine >= 0) {
+            string who = !string.IsNullOrEmpty(_winnerName)
+                ? _winnerName
+                : (Client != null ? Client.GetPlayerName(_winnerLine) : PongProtocol.DefaultPlayerName(_winnerLine));
+            return "Match over — " + who + " wins!";
+        }
+        return "Match over";
     }
 
     void TryConnect()
@@ -96,8 +411,11 @@ public class PongClientConnectOverlay : MonoBehaviour
         Client.DestinationIP = ip;
         Client.DestinationPort = port;
         Client.Close();
+        ClearMatchUiState();
 
         if (Client.Connect()) {
+            Client.SendName(_playerName);
+            Client.SendReady();
             _status = "Connected, syncing…";
             if (View != null) View.ForceBindAndSync();
         } else {
@@ -111,6 +429,11 @@ public class PongClientConnectOverlay : MonoBehaviour
         _stylesReady = true;
 
         _boxStyle = new GUIStyle(GUI.skin.box) { fontSize = 16, alignment = TextAnchor.UpperCenter };
+        _titleStyle = new GUIStyle(GUI.skin.label) {
+            fontSize = 20,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter,
+        };
         _labelStyle = new GUIStyle(GUI.skin.label) { fontSize = 14, wordWrap = true };
         _fieldStyle = new GUIStyle(GUI.skin.textField) { fontSize = 14 };
         _buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 15 };

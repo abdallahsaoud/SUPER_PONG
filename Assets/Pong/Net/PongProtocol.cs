@@ -9,22 +9,32 @@ using System.Text;
 ///
 /// Client -> Server:
 ///   PADDLE <ringAngleRadians>
+///   NAME <displayName>                       (tail may contain spaces)
+///   READY                                      (player wants to be in the next match)
+///   POSTGAME                                   (player is on the end-of-round menu)
+///   SPECTATE                                   (player is watching only, not queued)
 ///
 /// Server -> Client:
 ///   ASSIGN <lineIndex> <lineCount>
+///   NAMES <name0><tab><name1>...               (tab-separated, one per line slot)
 ///   ROSTER <lineCount>
 ///   STATE  <ballX> <ballY> <angle0> <angle1> ... <angleN-1>
 ///   SCORE  <lineIndex> <score>
 ///   DAMAGE <lineIndex> <state>            (state: 0=Intact, 1=Scattered, 2=Broken)
-///   WIN    <lineIndex>
+///   WIN    <lineIndex> <winnerName>
 ///   RESET
+///   COUNTDOWN <secondsRemaining>           (0 = hide restart timer)
 /// </summary>
 public static class PongProtocol
 {
     public const char MessageDelimiter = '\n';
     public const char FieldSeparator = ' ';
 
-    public const string MsgPaddle   = "PADDLE";
+    public const string MsgPaddle    = "PADDLE";
+    public const string MsgName      = "NAME";
+    public const string MsgReady     = "READY";
+    public const string MsgPostGame  = "POSTGAME";
+    public const string MsgSpectate  = "SPECTATE";
     public const string MsgAssign   = "ASSIGN";
     public const string MsgState    = "STATE";
     public const string MsgScore    = "SCORE";
@@ -33,8 +43,73 @@ public static class PongProtocol
     public const string MsgReset    = "RESET";
     public const string MsgGeometry = "GEOMETRY";
     public const string MsgRoster   = "ROSTER";
+    public const string MsgNames      = "NAMES";
+    public const string MsgCountdown  = "COUNTDOWN";
+
+    public const char NameListSeparator = '\t';
+    public const int MaxPlayerNameLength = 24;
 
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    public static string SanitizePlayerName(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var trimmed = raw.Trim();
+        if (trimmed.Length > MaxPlayerNameLength) {
+            trimmed = trimmed.Substring(0, MaxPlayerNameLength);
+        }
+        trimmed = trimmed
+            .Replace(NameListSeparator, ' ')
+            .Replace(MessageDelimiter, ' ');
+        return trimmed;
+    }
+
+    public static string DefaultPlayerName(int lineIndex)
+        => "Player " + (lineIndex + 1).ToString(Inv);
+
+    public static string FormatName(string displayName)
+    {
+        string safe = SanitizePlayerName(displayName);
+        if (string.IsNullOrEmpty(safe)) safe = "Player";
+        return MsgName + FieldSeparator + safe + MessageDelimiter;
+    }
+
+    public static string FormatReady() => MsgReady + MessageDelimiter;
+    public static string FormatPostGame() => MsgPostGame + MessageDelimiter;
+    public static string FormatSpectate() => MsgSpectate + MessageDelimiter;
+
+    public static string FormatNames(IList<string> names)
+    {
+        var sb = new StringBuilder(64);
+        sb.Append(MsgNames);
+        for (int i = 0; i < names.Count; i++) {
+            sb.Append(NameListSeparator);
+            string safe = SanitizePlayerName(names[i]);
+            if (string.IsNullOrEmpty(safe)) safe = DefaultPlayerName(i);
+            sb.Append(safe);
+        }
+        sb.Append(MessageDelimiter);
+        return sb.ToString();
+    }
+
+    public static string[] ParseNamesPayload(string payload)
+    {
+        if (string.IsNullOrEmpty(payload)) return new string[0];
+
+        while (payload.Length > 0
+            && (payload[0] == NameListSeparator || payload[0] == FieldSeparator)) {
+            payload = payload.Substring(1);
+        }
+        if (payload.Length == 0) return new string[0];
+
+        string[] parts = payload.Split(NameListSeparator);
+        var names = new string[parts.Length];
+        for (int i = 0; i < parts.Length; i++) {
+            string safe = SanitizePlayerName(parts[i]);
+            names[i] = string.IsNullOrEmpty(safe) ? DefaultPlayerName(i) : safe;
+        }
+        return names;
+    }
 
     public static string FormatPaddle(float y)
         => MsgPaddle + FieldSeparator + y.ToString("0.###", Inv) + MessageDelimiter;
@@ -61,11 +136,56 @@ public static class PongProtocol
     public static string FormatDamage(int lineIndex, int state)
         => MsgDamage + FieldSeparator + lineIndex.ToString(Inv) + FieldSeparator + state.ToString(Inv) + MessageDelimiter;
 
-    public static string FormatWin(int lineIndex)
-        => MsgWin + FieldSeparator + lineIndex.ToString(Inv) + MessageDelimiter;
+    public static string FormatWin(int lineIndex, string displayName)
+    {
+        string safe = SanitizePlayerName(displayName);
+        if (string.IsNullOrEmpty(safe)) safe = DefaultPlayerName(lineIndex);
+        return MsgWin + FieldSeparator + lineIndex.ToString(Inv) + FieldSeparator + safe + MessageDelimiter;
+    }
+
+    public static bool TryGetMessageHead(string message, out string head)
+    {
+        head = string.Empty;
+        if (string.IsNullOrEmpty(message)) return false;
+
+        int sep = message.IndexOf(FieldSeparator);
+        if (sep < 0) sep = message.IndexOf(NameListSeparator);
+        head = sep < 0 ? message : message.Substring(0, sep);
+        return head.Length > 0;
+    }
+
+    public static bool TryParseWin(string message, out int lineIndex, out string winnerName)
+    {
+        lineIndex = -1;
+        winnerName = string.Empty;
+        if (!TryGetMessageHead(message, out string head) || head != MsgWin) return false;
+
+        string rest = message.Substring(head.Length);
+        while (rest.Length > 0
+            && (rest[0] == FieldSeparator || rest[0] == NameListSeparator)) {
+            rest = rest.Substring(1);
+        }
+        if (rest.Length == 0) return false;
+
+        int sep = rest.IndexOf(FieldSeparator);
+        if (sep < 0) {
+            if (!TryParseInt(rest, out lineIndex)) return false;
+            return true;
+        }
+
+        if (!TryParseInt(rest.Substring(0, sep), out lineIndex)) return false;
+        winnerName = SanitizePlayerName(rest.Substring(sep + 1));
+        return true;
+    }
 
     public static string FormatReset()
         => MsgReset + MessageDelimiter;
+
+    public static string FormatCountdown(int secondsRemaining)
+    {
+        int seconds = secondsRemaining < 0 ? 0 : secondsRemaining;
+        return MsgCountdown + FieldSeparator + seconds.ToString(Inv) + MessageDelimiter;
+    }
 
     public static string FormatRoster(int lineCount)
         => MsgRoster + FieldSeparator + lineCount.ToString(Inv) + MessageDelimiter;
