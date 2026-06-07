@@ -15,8 +15,11 @@ public static class CircleArenaConfig
     public const int RingSegments = 96;
     public const float FirstSlotDegrees = 90f;
 
-    public const float BallSpeedAccelPerBounce = 1.08f;
     public const float DefaultBallSpeed = 4f;
+    public const float MaxBallSpeed = 9f;
+    public const int WallBouncesBeforeSpeedUp = 5;
+    public const float BallSpeedAccelAfterMisses = 1.15f;
+    public const float WallBounceAngleJitterDegrees = 12f;
     public const int BallPhysicsSubsteps = 6;
 
     public static readonly Color RingColor = new Color(0.25f, 0.9f, 1f, 0.95f);
@@ -87,7 +90,7 @@ public static class CircleArenaConfig
     public static float GetCameraOrthographicSize()
         => Radius + 1.8f;
 
-    public static bool ReflectBallOffRing(ref Vector2 pos, ref Vector2 dir, float ballRadius, ref float speed)
+    public static bool ReflectBallOffRing(ref Vector2 pos, ref Vector2 dir, float ballRadius)
     {
         float maxDist = GetBounceRadius(ballRadius);
         float dist = pos.magnitude;
@@ -101,7 +104,6 @@ public static class CircleArenaConfig
         if (dot > 0f) {
             dir = dir - 2f * dot * normal;
             if (dir.sqrMagnitude > 1e-6f) dir.Normalize();
-            speed *= BallSpeedAccelPerBounce;
         }
         return true;
     }

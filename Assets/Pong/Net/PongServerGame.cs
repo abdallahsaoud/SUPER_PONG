@@ -53,6 +53,7 @@ public class PongServerGame : MonoBehaviour
     Vector2 _ballDir;
     BallState _state = BallState.WaitingForPlayers;
     int _winnerLine = -1;
+    int _wallBouncesSincePlayerHit;
     float _stateAccumulator;
     float _preMatchCountdownRemaining;
     float _postRoundLobbyRemaining;
@@ -265,9 +266,12 @@ public class PongServerGame : MonoBehaviour
         }
 
         _ballPos = BallStart;
-        _ballDir = Random.insideUnitCircle.normalized;
+        _ballDir = Random.insideUnitCircle;
+        if (_ballDir.sqrMagnitude < 1e-4f) _ballDir = Random.insideUnitCircle;
         if (_ballDir.sqrMagnitude < 1e-4f) _ballDir = Vector2.right;
+        _ballDir.Normalize();
         BallSpeed = CircleArenaConfig.DefaultBallSpeed;
+        _wallBouncesSincePlayerHit = 0;
         _state = BallState.Playing;
         _winnerLine = -1;
         _server.Broadcast(PongProtocol.FormatReset());
@@ -433,7 +437,9 @@ public class PongServerGame : MonoBehaviour
         for (int step = 0; step < steps; step++) {
             _ballPos += _ballDir * BallSpeed * subDt;
 
-            while (CircleArenaConfig.ReflectBallOffRing(ref _ballPos, ref _ballDir, BallRadius, ref BallSpeed)) { }
+            while (CircleArenaConfig.ReflectBallOffRing(ref _ballPos, ref _ballDir, BallRadius)) {
+                HandleWallBounceWithoutPlayerHit();
+            }
 
             for (int i = 0; i < Lines.Count; i++) {
                 var rt = _runtime[i];
@@ -442,16 +448,40 @@ public class PongServerGame : MonoBehaviour
                 if (!CircleArenaConfig.BallHitsPlatform(_ballPos, BallRadius, rt.RingAngleRad)) continue;
 
                 EliminatePlayer(i);
+                _wallBouncesSincePlayerHit = 0;
 
                 Vector2 away = (_ballPos.sqrMagnitude > 1e-4f) ? _ballPos.normalized : Vector2.up;
                 _ballPos = away * (CircleArenaConfig.GetBounceRadius(BallRadius) - 0.02f);
                 if (_ballDir.sqrMagnitude > 1e-4f) {
                     _ballDir = Vector2.Reflect(_ballDir, away).normalized;
                 }
-                BallSpeed *= CircleArenaConfig.BallSpeedAccelPerBounce;
                 return;
             }
         }
+    }
+
+    void HandleWallBounceWithoutPlayerHit()
+    {
+        _wallBouncesSincePlayerHit++;
+        AddWallBounceJitter();
+
+        if (_wallBouncesSincePlayerHit < CircleArenaConfig.WallBouncesBeforeSpeedUp) return;
+
+        _wallBouncesSincePlayerHit = 0;
+        BallSpeed = Mathf.Min(
+            BallSpeed * CircleArenaConfig.BallSpeedAccelAfterMisses,
+            CircleArenaConfig.MaxBallSpeed);
+    }
+
+    void AddWallBounceJitter()
+    {
+        if (_ballDir.sqrMagnitude < 1e-6f) return;
+
+        float jitter = Random.Range(
+            -CircleArenaConfig.WallBounceAngleJitterDegrees,
+            CircleArenaConfig.WallBounceAngleJitterDegrees);
+        _ballDir = Quaternion.Euler(0f, 0f, jitter) * _ballDir;
+        _ballDir.Normalize();
     }
 
     void RespreadPlayerAngles()
