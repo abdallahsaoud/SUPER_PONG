@@ -25,6 +25,8 @@ public class PongServerGame : MonoBehaviour
     [Header("Post-round lobby")]
     [Tooltip("After a 2-player round ends, wait this long for more players before the next match.")]
     public float PostRoundLobbySeconds = 10f;
+    [Tooltip("Countdown shown to every connected client before a match starts.")]
+    public float PreMatchCountdownSeconds = 5f;
 
     public List<LineConfig> Lines = new List<LineConfig>();
 
@@ -43,7 +45,7 @@ public class PongServerGame : MonoBehaviour
         public string DisplayName = string.Empty;
     }
 
-    public enum BallState { WaitingForPlayers, Playing, Won }
+    public enum BallState { WaitingForPlayers, Starting, Playing, Won }
 
     PongServer _server;
     LineRuntime[] _runtime;
@@ -51,7 +53,9 @@ public class PongServerGame : MonoBehaviour
     Vector2 _ballDir;
     BallState _state = BallState.WaitingForPlayers;
     int _winnerLine = -1;
+    int _wallBouncesSincePlayerHit;
     float _stateAccumulator;
+    float _preMatchCountdownRemaining;
     float _postRoundLobbyRemaining;
     int _lastBroadcastCountdown = -1;
     float _nextDebugPaddleLogTime;
@@ -135,10 +139,12 @@ public class PongServerGame : MonoBehaviour
                 EnterWaitingForPlayers("not enough players");
             }
         } else if (_state == BallState.WaitingForPlayers && inGameCount >= MinPlayersToPlay) {
-            StartMatch();
+            BeginPreMatchCountdown();
         }
 
-        if (_state == BallState.Playing) {
+        if (_state == BallState.Starting) {
+            TickPreMatchCountdown(dt, inGameCount);
+        } else if (_state == BallState.Playing) {
             StepBall(dt);
         } else if (_state == BallState.Won) {
             TickPostRoundLobby(dt, connectedCount, inGameCount);
@@ -260,9 +266,12 @@ public class PongServerGame : MonoBehaviour
         }
 
         _ballPos = BallStart;
-        _ballDir = Random.insideUnitCircle.normalized;
+        _ballDir = Random.insideUnitCircle;
+        if (_ballDir.sqrMagnitude < 1e-4f) _ballDir = Random.insideUnitCircle;
         if (_ballDir.sqrMagnitude < 1e-4f) _ballDir = Vector2.right;
+        _ballDir.Normalize();
         BallSpeed = CircleArenaConfig.DefaultBallSpeed;
+        _wallBouncesSincePlayerHit = 0;
         _state = BallState.Playing;
         _winnerLine = -1;
         _server.Broadcast(PongProtocol.FormatReset());
@@ -270,6 +279,12 @@ public class PongServerGame : MonoBehaviour
 
     void StartMatch()
     {
+        if (GetInGameCount() < MinPlayersToPlay) {
+            EnterWaitingForPlayers("not enough ready players");
+            return;
+        }
+
+        _preMatchCountdownRemaining = 0f;
         _postRoundLobbyRemaining = 0f;
         BroadcastCountdown(0);
         for (int i = 0; i < _runtime.Length; i++) {
@@ -278,6 +293,39 @@ public class PongServerGame : MonoBehaviour
         BroadcastRosterAndAssign();
         Debug.Log("PongServerGame: MATCH_STARTED");
         ServeBall();
+    }
+
+    void BeginPreMatchCountdown()
+    {
+        if (_state == BallState.Starting || _state == BallState.Playing) return;
+        if (GetInGameCount() < MinPlayersToPlay) return;
+
+        _state = BallState.Starting;
+        _winnerLine = -1;
+        _ballPos = BallStart;
+        _ballDir = Vector2.zero;
+        _preMatchCountdownRemaining = PreMatchCountdownSeconds > 0f ? PreMatchCountdownSeconds : 5f;
+        _lastBroadcastCountdown = -1;
+        BroadcastCountdown(GetPreMatchCountdownSeconds());
+        BroadcastRosterAndAssign();
+        Debug.Log("PongServerGame: MATCH_STARTING in "
+            + _preMatchCountdownRemaining.ToString("0.#") + "s.");
+    }
+
+    void TickPreMatchCountdown(float dt, int inGameCount)
+    {
+        if (inGameCount < MinPlayersToPlay) {
+            EnterWaitingForPlayers("not enough ready players during countdown");
+            return;
+        }
+
+        _preMatchCountdownRemaining -= dt;
+        int seconds = GetPreMatchCountdownSeconds();
+        BroadcastCountdown(seconds);
+
+        if (_preMatchCountdownRemaining <= 0f) {
+            StartMatch();
+        }
     }
 
     void BeginPostRoundLobby()
@@ -299,11 +347,10 @@ public class PongServerGame : MonoBehaviour
 
         if (connectedCount == MinPlayersToPlay) {
             BeginPostRoundLobby();
-            TryStartMatchWhenReady();
             return;
         }
 
-        TryStartMatchWhenReady();
+        BeginPostRoundLobby();
     }
 
     void TickPostRoundLobby(float dt, int connectedCount, int inGameCount)
@@ -313,8 +360,8 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
-        if (inGameCount >= MinPlayersToPlay) {
-            StartMatch();
+        if (_postRoundLobbyRemaining <= 0f && inGameCount >= MinPlayersToPlay) {
+            BeginPreMatchCountdown();
             return;
         }
 
@@ -340,13 +387,19 @@ public class PongServerGame : MonoBehaviour
         if (GetInGameCount() < MinPlayersToPlay) return;
 
         if (_state == BallState.WaitingForPlayers) {
-            StartMatch();
+            BeginPreMatchCountdown();
             return;
         }
 
-        if (_state == BallState.Won) {
-            StartMatch();
+        if (_state == BallState.Won && _postRoundLobbyRemaining <= 0f) {
+            BeginPreMatchCountdown();
         }
+    }
+
+    int GetPreMatchCountdownSeconds()
+    {
+        if (_preMatchCountdownRemaining <= 0f) return 0;
+        return Mathf.CeilToInt(_preMatchCountdownRemaining);
     }
 
     int GetPostRoundCountdownSeconds()
@@ -365,6 +418,7 @@ public class PongServerGame : MonoBehaviour
     void EnterWaitingForPlayers(string reason)
     {
         CancelInvoke(nameof(ServeBall));
+        _preMatchCountdownRemaining = 0f;
         _postRoundLobbyRemaining = 0f;
         BroadcastCountdown(0);
         _state = BallState.WaitingForPlayers;
@@ -383,7 +437,9 @@ public class PongServerGame : MonoBehaviour
         for (int step = 0; step < steps; step++) {
             _ballPos += _ballDir * BallSpeed * subDt;
 
-            while (CircleArenaConfig.ReflectBallOffRing(ref _ballPos, ref _ballDir, BallRadius, ref BallSpeed)) { }
+            while (CircleArenaConfig.ReflectBallOffRing(ref _ballPos, ref _ballDir, BallRadius)) {
+                HandleWallBounceWithoutPlayerHit();
+            }
 
             for (int i = 0; i < Lines.Count; i++) {
                 var rt = _runtime[i];
@@ -392,16 +448,40 @@ public class PongServerGame : MonoBehaviour
                 if (!CircleArenaConfig.BallHitsPlatform(_ballPos, BallRadius, rt.RingAngleRad)) continue;
 
                 EliminatePlayer(i);
+                _wallBouncesSincePlayerHit = 0;
 
                 Vector2 away = (_ballPos.sqrMagnitude > 1e-4f) ? _ballPos.normalized : Vector2.up;
                 _ballPos = away * (CircleArenaConfig.GetBounceRadius(BallRadius) - 0.02f);
                 if (_ballDir.sqrMagnitude > 1e-4f) {
                     _ballDir = Vector2.Reflect(_ballDir, away).normalized;
                 }
-                BallSpeed *= CircleArenaConfig.BallSpeedAccelPerBounce;
                 return;
             }
         }
+    }
+
+    void HandleWallBounceWithoutPlayerHit()
+    {
+        _wallBouncesSincePlayerHit++;
+        AddWallBounceJitter();
+
+        if (_wallBouncesSincePlayerHit < CircleArenaConfig.WallBouncesBeforeSpeedUp) return;
+
+        _wallBouncesSincePlayerHit = 0;
+        BallSpeed = Mathf.Min(
+            BallSpeed * CircleArenaConfig.BallSpeedAccelAfterMisses,
+            CircleArenaConfig.MaxBallSpeed);
+    }
+
+    void AddWallBounceJitter()
+    {
+        if (_ballDir.sqrMagnitude < 1e-6f) return;
+
+        float jitter = Random.Range(
+            -CircleArenaConfig.WallBounceAngleJitterDegrees,
+            CircleArenaConfig.WallBounceAngleJitterDegrees);
+        _ballDir = Quaternion.Euler(0f, 0f, jitter) * _ballDir;
+        _ballDir.Normalize();
     }
 
     void RespreadPlayerAngles()

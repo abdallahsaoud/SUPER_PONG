@@ -262,7 +262,7 @@ public class PongClientConnectOverlay : MonoBehaviour
 
         GUILayout.BeginArea(rect);
         GUILayout.Space(14);
-        GUILayout.Label("Next match in " + _restartCountdownSeconds + "…", _titleStyle);
+        GUILayout.Label("Match starts in " + _restartCountdownSeconds + "…", _titleStyle);
         GUILayout.EndArea();
     }
 
