@@ -245,7 +245,10 @@ public class PongServerGame : MonoBehaviour
                 if (client.LineIndex >= 0 && client.LineIndex < _runtime.Length) {
                     var rt = _runtime[client.LineIndex];
                     if (rt.Health >= HealthEliminated) return;
-                    float clamped = CircleArenaConfig.NormalizeAngleRad(angleRad);
+                    float clamped = ClampPlatformAngleAgainstPlayers(
+                        client.LineIndex,
+                        rt.RingAngleRad,
+                        angleRad);
                     rt.RingAngleRad = clamped;
                     Lines[client.LineIndex].RingAngleRad = clamped;
                     if (DebugNetworkLogs && Time.time >= _nextDebugPaddleLogTime) {
@@ -482,6 +485,31 @@ public class PongServerGame : MonoBehaviour
             CircleArenaConfig.WallBounceAngleJitterDegrees);
         _ballDir = Quaternion.Euler(0f, 0f, jitter) * _ballDir;
         _ballDir.Normalize();
+    }
+
+    float ClampPlatformAngleAgainstPlayers(int lineIndex, float currentAngleRad, float desiredAngleRad)
+    {
+        desiredAngleRad = CircleArenaConfig.NormalizeAngleRad(desiredAngleRad);
+        if (_runtime == null || lineIndex < 0 || lineIndex >= _runtime.Length) return desiredAngleRad;
+
+        float moveDelta = CircleArenaConfig.SignedAngleDeltaRad(currentAngleRad, desiredAngleRad);
+        float fallbackSign = moveDelta >= 0f ? 1f : -1f;
+
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < _runtime.Length; i++) {
+                if (i == lineIndex) continue;
+                var other = _runtime[i];
+                if (other == null || !other.Assigned || other.Health >= HealthEliminated) continue;
+
+                desiredAngleRad = CircleArenaConfig.ClampOutsidePlatform(
+                    desiredAngleRad,
+                    other.RingAngleRad,
+                    _runtime.Length,
+                    fallbackSign);
+            }
+        }
+
+        return desiredAngleRad;
     }
 
     void RespreadPlayerAngles()

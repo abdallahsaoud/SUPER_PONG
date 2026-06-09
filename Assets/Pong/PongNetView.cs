@@ -309,6 +309,31 @@ public class PongNetView : MonoBehaviour
         }
     }
 
+    public float ClampLocalAngleAgainstPlayers(int lineIndex, float currentAngleRad, float desiredAngleRad)
+    {
+        desiredAngleRad = CircleArenaConfig.NormalizeAngleRad(desiredAngleRad);
+        if (_displayAngles == null || lineIndex < 0 || lineIndex >= _displayAngles.Length) return desiredAngleRad;
+
+        float moveDelta = CircleArenaConfig.SignedAngleDeltaRad(currentAngleRad, desiredAngleRad);
+        float fallbackSign = moveDelta >= 0f ? 1f : -1f;
+        int totalPlayers = _displayAngles.Length;
+
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < _displayAngles.Length; i++) {
+                if (i == lineIndex) continue;
+                if (IsLineEliminated(i)) continue;
+
+                desiredAngleRad = CircleArenaConfig.ClampOutsidePlatform(
+                    desiredAngleRad,
+                    _displayAngles[i],
+                    totalPlayers,
+                    fallbackSign);
+            }
+        }
+
+        return desiredAngleRad;
+    }
+
     float GetLocalDisplayAngle(int lineIndex)
     {
         if (_localPaddle != null && Client != null && lineIndex == Client.LineIndex) {
