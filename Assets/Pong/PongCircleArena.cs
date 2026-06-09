@@ -46,7 +46,7 @@ public class PongCircleArena : MonoBehaviour
             var line = go.AddComponent<LineRenderer>();
             CircleArenaConfig.ConfigureArcLineRenderer(line);
             float angle = CircleArenaConfig.GetInitialAngleRad(i, count);
-            CircleArenaConfig.UpdateArcPlatform(line, angle);
+            CircleArenaConfig.UpdateArcPlatform(line, angle, count);
             SetArcColor(line, CircleArenaConfig.RemotePlatformColor);
 
             _platformLines[i] = line;
@@ -75,7 +75,7 @@ public class PongCircleArena : MonoBehaviour
     {
         var line = GetPlatformLine(index);
         if (line == null) return;
-        CircleArenaConfig.UpdateArcPlatform(line, angleRad);
+        CircleArenaConfig.UpdateArcPlatform(line, angleRad, _platformLines.Length);
     }
 
     public void SetPlatformActive(int index, bool active)

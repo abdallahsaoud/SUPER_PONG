@@ -262,7 +262,7 @@ public class PongNetView : MonoBehaviour
             if (i == ownedLine) {
                 var ownedLineRenderer = CircleArena.GetPlatformLine(i);
                 if (ownedLineRenderer != null && _localPaddle != null) {
-                    CircleArenaConfig.UpdateArcPlatform(ownedLineRenderer, GetLocalDisplayAngle(i));
+                    CircleArenaConfig.UpdateArcPlatform(ownedLineRenderer, GetLocalDisplayAngle(i), paddles.Length);
                 }
                 ApplyLineVisual(i);
                 continue;

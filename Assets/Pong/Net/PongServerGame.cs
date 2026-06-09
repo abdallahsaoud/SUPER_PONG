@@ -445,7 +445,7 @@ public class PongServerGame : MonoBehaviour
                 var rt = _runtime[i];
                 if (!rt.Assigned || rt.Health >= HealthEliminated) continue;
 
-                if (!CircleArenaConfig.BallHitsPlatform(_ballPos, BallRadius, rt.RingAngleRad)) continue;
+                if (!CircleArenaConfig.BallHitsPlatform(_ballPos, BallRadius, rt.RingAngleRad, Lines.Count)) continue;
 
                 EliminatePlayer(i);
                 _wallBouncesSincePlayerHit = 0;
