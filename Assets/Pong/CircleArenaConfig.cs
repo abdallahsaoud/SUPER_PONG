@@ -5,10 +5,13 @@ using UnityEngine;
 /// </summary>
 public static class CircleArenaConfig
 {
-    public const float Radius = 5f;
+    public const float Radius = 7f;
     public const int MaxPlayers = 8;
 
     public const float PlatformArcDegrees = 34f;
+    public const float PlatformArcFractionOfSlice = 0.5f;
+    public const float PlatformMaxArcDegrees = 30f;
+    public const float PlatformMinArcDegrees = 8f;
     public const float PlatformLineWidth = 0.42f;
     public const int PlatformArcSegments = 14;
     public const float RingLineWidth = 0.06f;
@@ -26,7 +29,16 @@ public static class CircleArenaConfig
     public static readonly Color LocalPlatformColor = new Color(0.95f, 0.98f, 1f, 1f);
     public static readonly Color RemotePlatformColor = new Color(0.72f, 0.78f, 0.88f, 0.62f);
 
-    public static float PlatformHalfArcRad => PlatformArcDegrees * 0.5f * Mathf.Deg2Rad;
+    public static float GetPlatformArcDegrees(int totalPlayers)
+    {
+        if (totalPlayers <= 0) totalPlayers = 1;
+        float slice = 360f / totalPlayers;
+        float arc = slice * PlatformArcFractionOfSlice;
+        return Mathf.Clamp(arc, PlatformMinArcDegrees, PlatformMaxArcDegrees);
+    }
+
+    public static float GetPlatformHalfArcRad(int totalPlayers)
+        => GetPlatformArcDegrees(totalPlayers) * 0.5f * Mathf.Deg2Rad;
 
     public static float NormalizeAngleRad(float angleRad)
     {
@@ -61,13 +73,13 @@ public static class CircleArenaConfig
         if (shader != null) line.material = new Material(shader);
     }
 
-    public static void UpdateArcPlatform(LineRenderer line, float centerAngleRad)
+    public static void UpdateArcPlatform(LineRenderer line, float centerAngleRad, int totalPlayers)
     {
         if (line == null) return;
 
         int pointCount = PlatformArcSegments;
         line.positionCount = pointCount;
-        float halfArc = PlatformHalfArcRad;
+        float halfArc = GetPlatformHalfArcRad(totalPlayers);
 
         for (int i = 0; i < pointCount; i++) {
             float t = pointCount <= 1 ? 0.5f : (float)i / (pointCount - 1);
@@ -108,7 +120,7 @@ public static class CircleArenaConfig
         return true;
     }
 
-    public static bool BallHitsPlatform(Vector2 ballPos, float ballRadius, float platformAngleRad)
+    public static bool BallHitsPlatform(Vector2 ballPos, float ballRadius, float platformAngleRad, int totalPlayers)
     {
         float dist = ballPos.magnitude;
         float ballAngle = Mathf.Atan2(ballPos.y, ballPos.x);
@@ -119,7 +131,7 @@ public static class CircleArenaConfig
         float radialTol = PlatformLineWidth * 0.5f + ballRadius;
         if (Mathf.Abs(dist - Radius) > radialTol) return false;
 
-        float angularTol = PlatformHalfArcRad + Mathf.Atan2(ballRadius, Mathf.Max(Radius, 0.01f));
+        float angularTol = GetPlatformHalfArcRad(totalPlayers) + Mathf.Atan2(ballRadius, Mathf.Max(Radius, 0.01f));
         return angleDiff <= angularTol;
     }
 }
