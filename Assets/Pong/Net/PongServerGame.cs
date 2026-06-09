@@ -25,6 +25,8 @@ public class PongServerGame : MonoBehaviour
     [Header("Post-round lobby")]
     [Tooltip("After a 2-player round ends, wait this long for more players before the next match.")]
     public float PostRoundLobbySeconds = 10f;
+    [Tooltip("After the second player joins, wait this long for more players. Reset when another player joins.")]
+    public float JoinLobbyCountdownSeconds = 10f;
     [Tooltip("Countdown shown to every connected client before a match starts.")]
     public float PreMatchCountdownSeconds = 5f;
 
@@ -45,7 +47,7 @@ public class PongServerGame : MonoBehaviour
         public string DisplayName = string.Empty;
     }
 
-    public enum BallState { WaitingForPlayers, Starting, Playing, Won }
+    public enum BallState { WaitingForPlayers, LobbyCountdown, Starting, Playing, Won }
 
     PongServer _server;
     LineRuntime[] _runtime;
@@ -55,6 +57,7 @@ public class PongServerGame : MonoBehaviour
     int _winnerLine = -1;
     int _wallBouncesSincePlayerHit;
     float _stateAccumulator;
+    float _joinLobbyCountdownRemaining;
     float _preMatchCountdownRemaining;
     float _postRoundLobbyRemaining;
     int _lastBroadcastCountdown = -1;
@@ -139,10 +142,12 @@ public class PongServerGame : MonoBehaviour
                 EnterWaitingForPlayers("not enough players");
             }
         } else if (_state == BallState.WaitingForPlayers && inGameCount >= MinPlayersToPlay) {
-            BeginPreMatchCountdown();
+            BeginJoinLobbyCountdown("minimum players reached");
         }
 
-        if (_state == BallState.Starting) {
+        if (_state == BallState.LobbyCountdown) {
+            TickJoinLobbyCountdown(dt, inGameCount);
+        } else if (_state == BallState.Starting) {
             TickPreMatchCountdown(dt, inGameCount);
         } else if (_state == BallState.Playing) {
             StepBall(dt);
@@ -182,6 +187,13 @@ public class PongServerGame : MonoBehaviour
 
         BroadcastRosterAndAssign();
         Debug.Log("PongServerGame: " + rt.DisplayName + " joined line " + idx + " (total " + Lines.Count + ").");
+
+        if ((_state == BallState.WaitingForPlayers
+                || _state == BallState.LobbyCountdown)
+            && GetInGameCount() >= MinPlayersToPlay) {
+            BeginJoinLobbyCountdown("player joined");
+            return;
+        }
 
         if (_state == BallState.Won) {
             TryStartMatchWhenReady();
@@ -287,6 +299,7 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
+        _joinLobbyCountdownRemaining = 0f;
         _preMatchCountdownRemaining = 0f;
         _postRoundLobbyRemaining = 0f;
         BroadcastCountdown(0);
@@ -296,6 +309,40 @@ public class PongServerGame : MonoBehaviour
         BroadcastRosterAndAssign();
         Debug.Log("PongServerGame: MATCH_STARTED");
         ServeBall();
+    }
+
+    void BeginJoinLobbyCountdown(string reason)
+    {
+        if (GetInGameCount() < MinPlayersToPlay) return;
+        if (_state == BallState.Playing || _state == BallState.Won) return;
+
+        _state = BallState.LobbyCountdown;
+        _winnerLine = -1;
+        _ballPos = BallStart;
+        _ballDir = Vector2.zero;
+        _preMatchCountdownRemaining = 0f;
+        _joinLobbyCountdownRemaining = JoinLobbyCountdownSeconds > 0f ? JoinLobbyCountdownSeconds : 10f;
+        _lastBroadcastCountdown = -1;
+        BroadcastJoinCountdown(GetJoinLobbyCountdownSeconds());
+        BroadcastRosterAndAssign();
+        Debug.Log("PongServerGame: LOBBY_COUNTDOWN reset to "
+            + _joinLobbyCountdownRemaining.ToString("0.#") + "s reason=" + reason);
+    }
+
+    void TickJoinLobbyCountdown(float dt, int inGameCount)
+    {
+        if (inGameCount < MinPlayersToPlay) {
+            EnterWaitingForPlayers("not enough ready players during lobby countdown");
+            return;
+        }
+
+        _joinLobbyCountdownRemaining -= dt;
+        BroadcastJoinCountdown(GetJoinLobbyCountdownSeconds());
+
+        if (_joinLobbyCountdownRemaining <= 0f) {
+            BroadcastJoinCountdown(0);
+            BeginPreMatchCountdown();
+        }
     }
 
     void BeginPreMatchCountdown()
@@ -390,13 +437,23 @@ public class PongServerGame : MonoBehaviour
         if (GetInGameCount() < MinPlayersToPlay) return;
 
         if (_state == BallState.WaitingForPlayers) {
-            BeginPreMatchCountdown();
+            BeginJoinLobbyCountdown("players ready");
+            return;
+        }
+
+        if (_state == BallState.LobbyCountdown) {
             return;
         }
 
         if (_state == BallState.Won && _postRoundLobbyRemaining <= 0f) {
             BeginPreMatchCountdown();
         }
+    }
+
+    int GetJoinLobbyCountdownSeconds()
+    {
+        if (_joinLobbyCountdownRemaining <= 0f) return 0;
+        return Mathf.CeilToInt(_joinLobbyCountdownRemaining);
     }
 
     int GetPreMatchCountdownSeconds()
@@ -418,9 +475,17 @@ public class PongServerGame : MonoBehaviour
         _server.Broadcast(PongProtocol.FormatCountdown(seconds));
     }
 
+    void BroadcastJoinCountdown(int seconds)
+    {
+        if (seconds == _lastBroadcastCountdown) return;
+        _lastBroadcastCountdown = seconds;
+        _server.Broadcast(PongProtocol.FormatJoinCountdown(seconds));
+    }
+
     void EnterWaitingForPlayers(string reason)
     {
         CancelInvoke(nameof(ServeBall));
+        _joinLobbyCountdownRemaining = 0f;
         _preMatchCountdownRemaining = 0f;
         _postRoundLobbyRemaining = 0f;
         BroadcastCountdown(0);

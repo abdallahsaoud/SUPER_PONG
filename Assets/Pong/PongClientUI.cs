@@ -126,7 +126,9 @@ public class PongClientUI : MonoBehaviour
             return;
         }
         TxtRestartCountdown.gameObject.SetActive(true);
-        TxtRestartCountdown.text = "Next match in " + seconds + "…";
+        TxtRestartCountdown.text = Client != null && Client.IsJoinLobbyCountdown
+            ? "Waiting for potential new players: " + seconds + "…"
+            : "Match starts in " + seconds + "…";
     }
 
     public void Connect()
