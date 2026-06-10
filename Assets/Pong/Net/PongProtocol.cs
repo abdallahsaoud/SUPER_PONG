@@ -24,6 +24,7 @@ using System.Text;
 ///   WIN    <lineIndex> <winnerName>
 ///   RESET
 ///   COUNTDOWN <secondsRemaining>           (0 = hide restart timer)
+///   JOINCOUNTDOWN <secondsRemaining>       (lobby waits for more players)
 /// </summary>
 public static class PongProtocol
 {
@@ -45,6 +46,7 @@ public static class PongProtocol
     public const string MsgRoster   = "ROSTER";
     public const string MsgNames      = "NAMES";
     public const string MsgCountdown  = "COUNTDOWN";
+    public const string MsgJoinCountdown = "JOINCOUNTDOWN";
 
     public const char NameListSeparator = '\t';
     public const int MaxPlayerNameLength = 24;
@@ -185,6 +187,12 @@ public static class PongProtocol
     {
         int seconds = secondsRemaining < 0 ? 0 : secondsRemaining;
         return MsgCountdown + FieldSeparator + seconds.ToString(Inv) + MessageDelimiter;
+    }
+
+    public static string FormatJoinCountdown(int secondsRemaining)
+    {
+        int seconds = secondsRemaining < 0 ? 0 : secondsRemaining;
+        return MsgJoinCountdown + FieldSeparator + seconds.ToString(Inv) + MessageDelimiter;
     }
 
     public static string FormatRoster(int lineCount)

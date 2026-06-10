@@ -12,6 +12,7 @@ public static class CircleArenaConfig
     public const float PlatformArcFractionOfSlice = 0.5f;
     public const float PlatformMaxArcDegrees = 30f;
     public const float PlatformMinArcDegrees = 8f;
+    public const float PlatformCollisionPaddingDegrees = 2f;
     public const float PlatformLineWidth = 0.42f;
     public const int PlatformArcSegments = 14;
     public const float RingLineWidth = 0.06f;
@@ -40,12 +41,30 @@ public static class CircleArenaConfig
     public static float GetPlatformHalfArcRad(int totalPlayers)
         => GetPlatformArcDegrees(totalPlayers) * 0.5f * Mathf.Deg2Rad;
 
+    public static float GetPlatformCollisionSeparationRad(int totalPlayers)
+        => GetPlatformHalfArcRad(totalPlayers) * 2f + PlatformCollisionPaddingDegrees * Mathf.Deg2Rad;
+
     public static float NormalizeAngleRad(float angleRad)
     {
         float twoPi = Mathf.PI * 2f;
         angleRad %= twoPi;
         if (angleRad < 0f) angleRad += twoPi;
         return angleRad;
+    }
+
+    public static float SignedAngleDeltaRad(float fromRad, float toRad)
+        => Mathf.DeltaAngle(fromRad * Mathf.Rad2Deg, toRad * Mathf.Rad2Deg) * Mathf.Deg2Rad;
+
+    public static float ClampOutsidePlatform(float desiredAngleRad, float otherAngleRad, int totalPlayers, float fallbackSign)
+    {
+        float minSeparation = GetPlatformCollisionSeparationRad(totalPlayers);
+        float delta = SignedAngleDeltaRad(otherAngleRad, desiredAngleRad);
+        if (Mathf.Abs(delta) >= minSeparation) return NormalizeAngleRad(desiredAngleRad);
+
+        float sign = Mathf.Abs(delta) > 0.0001f
+            ? Mathf.Sign(delta)
+            : (fallbackSign >= 0f ? 1f : -1f);
+        return NormalizeAngleRad(otherAngleRad + sign * minSeparation);
     }
 
     public static float GetInitialAngleRad(int index, int totalPlayers)

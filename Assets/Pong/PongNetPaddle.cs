@@ -26,7 +26,8 @@ public class PongNetPaddle : MonoBehaviour
         if (line == null || !line.gameObject.activeSelf) return;
 
         float direction = ReadMoveDirection();
-        _ringAngleRad = CircleArenaConfig.NormalizeAngleRad(_ringAngleRad + direction * Speed * Time.deltaTime);
+        float desiredAngle = CircleArenaConfig.NormalizeAngleRad(_ringAngleRad + direction * Speed * Time.deltaTime);
+        _ringAngleRad = View.ClampLocalAngleAgainstPlayers(idx, _ringAngleRad, desiredAngle);
 
         int playerCount = View.CircleArena.Paddles.Length;
         CircleArenaConfig.UpdateArcPlatform(line, _ringAngleRad, playerCount);

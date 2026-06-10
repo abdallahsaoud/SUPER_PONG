@@ -262,7 +262,10 @@ public class PongClientConnectOverlay : MonoBehaviour
 
         GUILayout.BeginArea(rect);
         GUILayout.Space(14);
-        GUILayout.Label("Match starts in " + _restartCountdownSeconds + "…", _titleStyle);
+        string text = Client != null && Client.IsJoinLobbyCountdown
+            ? "Waiting for potential new players: " + _restartCountdownSeconds + "…"
+            : "Match starts in " + _restartCountdownSeconds + "…";
+        GUILayout.Label(text, _titleStyle);
         GUILayout.EndArea();
     }
 

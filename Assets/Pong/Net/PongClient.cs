@@ -54,6 +54,7 @@ public class PongClient : MonoBehaviour
 
     /// <summary>Seconds until the next match starts (0 = no countdown shown).</summary>
     public int RestartCountdownSeconds { get; private set; }
+    public bool IsJoinLobbyCountdown { get; private set; }
 
     /// <summary>Assigned line index after ASSIGN arrives (-1 until then).</summary>
     public int LineIndex { get; private set; } = -1;
@@ -269,12 +270,22 @@ public class PongClient : MonoBehaviour
             }
             case PongProtocol.MsgReset: {
                 RestartCountdownSeconds = 0;
+                IsJoinLobbyCountdown = false;
                 OnReset?.Invoke();
                 break;
             }
             case PongProtocol.MsgCountdown: {
                 if (parts.Length >= 2 && PongProtocol.TryParseInt(parts[1], out int seconds)) {
                     RestartCountdownSeconds = seconds;
+                    IsJoinLobbyCountdown = false;
+                    OnCountdown?.Invoke(seconds);
+                }
+                break;
+            }
+            case PongProtocol.MsgJoinCountdown: {
+                if (parts.Length >= 2 && PongProtocol.TryParseInt(parts[1], out int seconds)) {
+                    RestartCountdownSeconds = seconds;
+                    IsJoinLobbyCountdown = seconds > 0;
                     OnCountdown?.Invoke(seconds);
                 }
                 break;
@@ -300,6 +311,7 @@ public class PongClient : MonoBehaviour
         LastRosterCount = 0;
         LastWinnerName = string.Empty;
         RestartCountdownSeconds = 0;
+        IsJoinLobbyCountdown = false;
         ParticipatesInGame = true;
         _playerNames = new string[0];
     }
