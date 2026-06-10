@@ -33,6 +33,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     string _winnerName = string.Empty;
     int _restartCountdownSeconds;
     bool _postGameSent;
+    bool _awaitingNextMatch;
 
     PongClient _boundClient;
 
@@ -91,6 +92,7 @@ public class PongClientConnectOverlay : MonoBehaviour
         _winnerName = string.Empty;
         _restartCountdownSeconds = 0;
         _postGameSent = false;
+        _awaitingNextMatch = false;
     }
 
     void HandleDamage(int lineIndex, int state)
@@ -150,14 +152,23 @@ public class PongClientConnectOverlay : MonoBehaviour
     void HandleReset()
     {
         _restartCountdownSeconds = 0;
-        if (_lost || _matchOver) return;
-        ClearMatchUiState();
+        // A RESET means the previous round is fully torn down: either the next match is being
+        // served or the server fell back to waiting. In both cases the end-of-round menu
+        // (lost / match-over / "waiting to restart") must clear so we don't strand the player.
+        if (_awaitingNextMatch || !(_lost || _matchOver)) {
+            ClearMatchUiState();
+            return;
+        }
+        // Local player lost / match still flagged over but hasn't opted in: keep their menu,
+        // just make sure no stale countdown lingers.
     }
 
     void HandleAssign(int lineIndex, int lineCount)
     {
-        // Roster rebroadcast during an active round must not dismiss the lost panel.
-        if (_matchOver) ClearMatchUiState();
+        // ASSIGN is rebroadcast whenever the roster changes (joins/leaves), including while the
+        // end-of-round menu is up. It must NOT dismiss that menu — only an actual match restart
+        // (RESET) or an explicit player action clears it. Otherwise a player joining the lobby
+        // would yank a still-deciding player out of the match-over screen.
     }
 
     void LeaveServer()
@@ -214,11 +225,6 @@ public class PongClientConnectOverlay : MonoBehaviour
         }
     }
 
-    bool IsLocalWinner()
-    {
-        return Client != null && Client.LineIndex >= 0 && _winnerLine == Client.LineIndex;
-    }
-
     void OnGUI()
     {
         EnsureStyles();
@@ -229,18 +235,16 @@ public class PongClientConnectOverlay : MonoBehaviour
             return;
         }
 
-        if (_matchOver && IsLocalWinner()) {
+        // Once the round is over, everyone (winner or loser) gets the match-over menu so they
+        // can opt into the next match. The "you've lost" panel is only for players eliminated
+        // while the round is still being played out by others.
+        if (_matchOver) {
             DrawMatchOverPanel();
             return;
         }
 
         if (_lost && !_spectating) {
             DrawLostPanel();
-            return;
-        }
-
-        if (_matchOver) {
-            DrawMatchOverPanel();
             return;
         }
 
@@ -374,12 +378,24 @@ public class PongClientConnectOverlay : MonoBehaviour
 
         GUILayout.Space(8);
 
-        if (GUILayout.Button("Stay for next match", _buttonStyle, GUILayout.Height(36))) {
+        if (_awaitingNextMatch) {
+            GUILayout.Label(GetAwaitingNextMatchText(), _labelStyle);
+        } else if (GUILayout.Button("Stay for next match", _buttonStyle, GUILayout.Height(36))) {
             ConfirmReadyForNextMatch();
-            ClearMatchUiState();
+            _awaitingNextMatch = true;
         }
 
         GUILayout.EndArea();
+    }
+
+    string GetAwaitingNextMatchText()
+    {
+        if (_restartCountdownSeconds > 0) {
+            return Client != null && Client.IsJoinLobbyCountdown
+                ? "Ready! Waiting for more players: " + _restartCountdownSeconds + "…"
+                : "Ready! Match starts in " + _restartCountdownSeconds + "…";
+        }
+        return "Ready! Waiting for other players to restart…";
     }
 
     string GetMatchOverTitle()
