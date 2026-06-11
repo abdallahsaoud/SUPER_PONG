@@ -14,6 +14,8 @@ using System.Text;
 ///                                               participant before a finished round can restart)
 ///   POSTGAME                                   (player is on the end-of-round menu, not readied)
 ///   SPECTATE                                   (player is watching only, not queued)
+///   COLOR <paletteSlot>                        (request a palette color 0..MaxPlayers-1; server
+///                                               swaps with whoever currently holds it, if taken)
 ///
 /// Server -> Client:
 ///   ASSIGN <lineIndex> <lineCount> <ringAngleRadians>
@@ -38,6 +40,7 @@ public static class PongProtocol
     public const string MsgReady     = "READY";
     public const string MsgPostGame  = "POSTGAME";
     public const string MsgSpectate  = "SPECTATE";
+    public const string MsgColor     = "COLOR";
     public const string MsgAssign   = "ASSIGN";
     public const string MsgState    = "STATE";
     public const string MsgScore    = "SCORE";
@@ -82,6 +85,9 @@ public static class PongProtocol
     public static string FormatReady() => MsgReady + MessageDelimiter;
     public static string FormatPostGame() => MsgPostGame + MessageDelimiter;
     public static string FormatSpectate() => MsgSpectate + MessageDelimiter;
+
+    public static string FormatColor(int paletteSlot)
+        => MsgColor + FieldSeparator + paletteSlot.ToString(Inv) + MessageDelimiter;
 
     public static string FormatNames(IList<string> names)
     {

@@ -261,6 +261,13 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
+        if (head == PongProtocol.MsgColor) {
+            if (PongProtocol.TryParseInt(tail, out int slot)) {
+                ApplyColorChoice(client, slot);
+            }
+            return;
+        }
+
         if (head == PongProtocol.MsgPaddle) {
             if (!client.InGame) return;
             if (PongProtocol.TryParseFloat(tail, out float angleRad)) {
@@ -667,6 +674,33 @@ public class PongServerGame : MonoBehaviour
         }
 
         return excludeIndex % palette.Length;
+    }
+
+    /// <summary>
+    /// Client-requested palette color. If another assigned player already holds that slot,
+    /// swap the two colors so every assigned slot stays unique and the request always takes
+    /// effect (instead of silently failing).
+    /// </summary>
+    void ApplyColorChoice(PongServer.ClientConnection client, int slot)
+    {
+        var palette = CircleArenaConfig.PlayerPalette;
+        if (palette == null || slot < 0 || slot >= palette.Length) return;
+        if (client.LineIndex < 0 || client.LineIndex >= _runtime.Length) return;
+
+        var rt = _runtime[client.LineIndex];
+        if (!rt.Assigned || rt.ColorSlot == slot) return;
+
+        for (int i = 0; i < _runtime.Length; i++) {
+            if (i == client.LineIndex) continue;
+            var other = _runtime[i];
+            if (other != null && other.Assigned && other.ColorSlot == slot) {
+                other.ColorSlot = rt.ColorSlot;
+                break;
+            }
+        }
+
+        rt.ColorSlot = slot;
+        BroadcastColors();
     }
 
     void ApplyClientDisplayName(PongServer.ClientConnection client, string rawName)
