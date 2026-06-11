@@ -37,6 +37,7 @@ public class PongClient : MonoBehaviour
     public delegate void GeometryHandler(IList<float> lineXs);
     public delegate void RosterHandler(int lineCount);
     public delegate void NamesHandler(IList<string> playerNames);
+    public delegate void ColorsHandler(IList<int> colorSlots);
     public delegate void CountdownHandler(int secondsRemaining);
 
     public AssignHandler   OnAssign;
@@ -48,9 +49,21 @@ public class PongClient : MonoBehaviour
     public ResetHandler    OnReset;
     public GeometryHandler OnGeometry;
     public NamesHandler    OnNames;
+    public ColorsHandler   OnColors;
     public CountdownHandler OnCountdown;
 
     string[] _playerNames = new string[0];
+    int[] _colorSlots = new int[0];
+
+    /// <summary>Palette slot for a given line index, or -1 if unknown.</summary>
+    public int GetColorSlot(int lineIndex)
+    {
+        if (lineIndex < 0 || lineIndex >= _colorSlots.Length) return -1;
+        return _colorSlots[lineIndex];
+    }
+
+    /// <summary>Palette slot for the local player (-1 until COLORS arrives).</summary>
+    public int MyColorSlot => GetColorSlot(LineIndex);
 
     /// <summary>Seconds until the next match starts (0 = no countdown shown).</summary>
     public int RestartCountdownSeconds { get; private set; }
@@ -297,6 +310,16 @@ public class PongClient : MonoBehaviour
                 OnGeometry?.Invoke(xs);
                 break;
             }
+            case PongProtocol.MsgColors: {
+                int n = parts.Length - 1;
+                var slots = new int[n];
+                for (int i = 0; i < n; i++) {
+                    if (!PongProtocol.TryParseInt(parts[1 + i], out slots[i])) slots[i] = -1;
+                }
+                _colorSlots = slots;
+                OnColors?.Invoke(slots);
+                break;
+            }
         }
     }
 
@@ -314,6 +337,7 @@ public class PongClient : MonoBehaviour
         IsJoinLobbyCountdown = false;
         ParticipatesInGame = true;
         _playerNames = new string[0];
+        _colorSlots = new int[0];
     }
 
     float GetDebugInterval()

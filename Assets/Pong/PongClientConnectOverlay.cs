@@ -8,7 +8,6 @@ using UnityEngine;
 /// </summary>
 public class PongClientConnectOverlay : MonoBehaviour
 {
-    const int HealthEliminated = 2;
     const int MinPlayersToStart = 2;
 
     public PongClient Client;
@@ -43,6 +42,8 @@ public class PongClientConnectOverlay : MonoBehaviour
     GUIStyle _fieldStyle;
     GUIStyle _buttonStyle;
     GUIStyle _titleStyle;
+
+    Texture2D _swatchTexture;
 
     public void Initialize(PongClient client, PongNetView view, string defaultIp, int defaultPort)
     {
@@ -99,7 +100,7 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     void HandleDamage(int lineIndex, int state)
     {
-        if (state < HealthEliminated) return;
+        if (state < CircleArenaConfig.HealthEliminated) return;
         // Once the match is over, the match-over popup takes over: don't re-flag the local
         // player as "lost" (which would otherwise resurface the You've-lost panel).
         if (_matchOver) return;
@@ -213,7 +214,11 @@ public class PongClientConnectOverlay : MonoBehaviour
         if (IsAwaitingMorePlayers()) {
             _status = "Awaiting more players to start…";
         } else if (Client.LineIndex >= 0) {
-            _status = "Connected as " + Client.GetPlayerName(Client.LineIndex);
+            string baseStatus = "Connected as " + Client.GetPlayerName(Client.LineIndex);
+            string colorName = CircleArenaConfig.GetPaletteColorName(Client.MyColorSlot);
+            _status = string.IsNullOrEmpty(colorName)
+                ? baseStatus
+                : baseStatus + " — you are " + colorName;
         } else {
             _status = "Connected, waiting for server…";
         }
@@ -361,6 +366,8 @@ public class PongClientConnectOverlay : MonoBehaviour
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, string.Empty, _boxStyle);
 
+        DrawLocalColorSwatch(rect);
+
         GUILayout.BeginArea(rect);
         GUILayout.Space(16);
         GUILayout.Label("You've lost", _titleStyle);
@@ -390,6 +397,8 @@ public class PongClientConnectOverlay : MonoBehaviour
         float h = 240f;
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, string.Empty, _boxStyle);
+
+        DrawLocalColorSwatch(rect);
 
         GUILayout.BeginArea(rect);
         GUILayout.Space(16);
@@ -474,6 +483,52 @@ public class PongClientConnectOverlay : MonoBehaviour
             if (View != null) View.ForceBindAndSync();
         } else {
             _status = Client.LastError;
+        }
+    }
+
+    void DrawLocalColorSwatch(Rect panelRect)
+    {
+        if (Client == null) return;
+        int slot = Client.MyColorSlot;
+        if (slot < 0) return;
+
+        if (_swatchTexture == null) {
+            _swatchTexture = new Texture2D(1, 1, TextureFormat.RGBA32, false) {
+                hideFlags = HideFlags.HideAndDontSave,
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Point,
+            };
+            _swatchTexture.SetPixel(0, 0, Color.white);
+            _swatchTexture.Apply();
+        }
+
+        Color color = CircleArenaConfig.GetPaletteColor(slot);
+        string label = CircleArenaConfig.GetPaletteColorName(slot);
+
+        const float padding = 10f;
+        const float swatchSize = 18f;
+        var swatchRect = new Rect(panelRect.x + padding, panelRect.y + padding, swatchSize, swatchSize);
+
+        Color prev = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(swatchRect, _swatchTexture, ScaleMode.StretchToFill);
+        GUI.color = prev;
+
+        if (!string.IsNullOrEmpty(label)) {
+            var labelRect = new Rect(
+                swatchRect.xMax + 6f,
+                swatchRect.y - 2f,
+                panelRect.width - swatchSize - padding * 2f - 6f,
+                swatchSize + 4f);
+            GUI.Label(labelRect, "You: " + label, _labelStyle);
+        }
+    }
+
+    void OnDestroy()
+    {
+        if (_swatchTexture != null) {
+            Destroy(_swatchTexture);
+            _swatchTexture = null;
         }
     }
 

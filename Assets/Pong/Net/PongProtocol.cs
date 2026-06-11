@@ -18,10 +18,11 @@ using System.Text;
 /// Server -> Client:
 ///   ASSIGN <lineIndex> <lineCount>
 ///   NAMES <name0><tab><name1>...               (tab-separated, one per line slot)
+///   COLORS <slot0> <slot1> ... <slotN-1>       (palette index per line; -1 = unassigned)
 ///   ROSTER <lineCount>
 ///   STATE  <ballX> <ballY> <angle0> <angle1> ... <angleN-1>
 ///   SCORE  <lineIndex> <score>
-///   DAMAGE <lineIndex> <state>            (state: 0=Intact, 1=Scattered, 2=Broken)
+///   DAMAGE <lineIndex> <state>            (state: 0=Intact, 2=Eliminated)
 ///   WIN    <lineIndex> <winnerName>
 ///   RESET
 ///   COUNTDOWN <secondsRemaining>           (0 = hide restart timer)
@@ -46,6 +47,7 @@ public static class PongProtocol
     public const string MsgGeometry = "GEOMETRY";
     public const string MsgRoster   = "ROSTER";
     public const string MsgNames      = "NAMES";
+    public const string MsgColors     = "COLORS";
     public const string MsgCountdown  = "COUNTDOWN";
     public const string MsgJoinCountdown = "JOINCOUNTDOWN";
 
@@ -198,6 +200,18 @@ public static class PongProtocol
 
     public static string FormatRoster(int lineCount)
         => MsgRoster + FieldSeparator + lineCount.ToString(Inv) + MessageDelimiter;
+
+    /// <summary>One palette slot per line (in line-index order). <c>-1</c> means unassigned.</summary>
+    public static string FormatColors(IList<int> slots)
+    {
+        var sb = new StringBuilder(32);
+        sb.Append(MsgColors);
+        for (int i = 0; i < slots.Count; i++) {
+            sb.Append(FieldSeparator).Append(slots[i].ToString(Inv));
+        }
+        sb.Append(MessageDelimiter);
+        return sb.ToString();
+    }
 
     /// <summary>Broadcast new X positions for every line. Sent after gap merge (line broken).</summary>
     public static string FormatGeometry(IList<float> lineXs)

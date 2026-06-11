@@ -3,8 +3,6 @@ using System.Collections.Generic;
 
 public class PongNetView : MonoBehaviour
 {
-    const int HealthEliminated = 2;
-
     public PongClient Client;
     public Transform Ball;
     public PongCircleArena CircleArena;
@@ -16,7 +14,7 @@ public class PongNetView : MonoBehaviour
         return _lineHealth != null
             && lineIndex >= 0
             && lineIndex < _lineHealth.Length
-            && _lineHealth[lineIndex] >= HealthEliminated;
+            && _lineHealth[lineIndex] >= CircleArenaConfig.HealthEliminated;
     }
 
     public bool IsLocalPlayerEliminated()
@@ -24,12 +22,11 @@ public class PongNetView : MonoBehaviour
         return Client != null && Client.LineIndex >= 0 && IsLineEliminated(Client.LineIndex);
     }
 
-    public Color ScatteredColor = new Color(1f, 0.55f, 0.1f, 0.85f);
-
     Vector3? _targetBall;
     float[] _targetAngles;
     float[] _displayAngles;
     int[] _lineHealth;
+    int[] _lineColorSlots;
     PongClient _subscribedClient;
     PongNetPaddle _localPaddle;
     int _lastSyncedLineIndex = -2;
@@ -57,6 +54,7 @@ public class PongNetView : MonoBehaviour
         _targetAngles = null;
         _displayAngles = null;
         _lineHealth = null;
+        _lineColorSlots = null;
         _lastSyncedLineIndex = -2;
         if (CircleArena != null) CircleArena.SetPlatformCount(0);
     }
@@ -77,6 +75,7 @@ public class PongNetView : MonoBehaviour
         Client.OnState += HandleState;
         Client.OnReset += HandleReset;
         Client.OnDamage += HandleDamage;
+        Client.OnColors += HandleColors;
         _subscribedClient = Client;
     }
 
@@ -88,6 +87,7 @@ public class PongNetView : MonoBehaviour
         _subscribedClient.OnState -= HandleState;
         _subscribedClient.OnReset -= HandleReset;
         _subscribedClient.OnDamage -= HandleDamage;
+        _subscribedClient.OnColors -= HandleColors;
         _subscribedClient = null;
     }
 
@@ -146,7 +146,7 @@ public class PongNetView : MonoBehaviour
         if (_lineHealth == null || CircleArena == null) return;
 
         for (int i = 0; i < _lineHealth.Length; i++) {
-            _lineHealth[i] = 0;
+            _lineHealth[i] = CircleArenaConfig.HealthIntact;
             CircleArena.SetPlatformActive(i, true);
         }
         ApplyAllPlatformPoses();
@@ -160,9 +160,21 @@ public class PongNetView : MonoBehaviour
         if (_lineHealth == null || lineIndex >= _lineHealth.Length) return;
 
         _lineHealth[lineIndex] = state;
-        bool eliminated = state >= 2;
+        bool eliminated = state >= CircleArenaConfig.HealthEliminated;
         CircleArena.SetPlatformActive(lineIndex, !eliminated);
         if (!eliminated) ApplyLineVisual(lineIndex);
+    }
+
+    void HandleColors(IList<int> colorSlots)
+    {
+        if (colorSlots == null) return;
+        if (_lineColorSlots == null || _lineColorSlots.Length != colorSlots.Count) {
+            _lineColorSlots = new int[colorSlots.Count];
+        }
+        for (int i = 0; i < colorSlots.Count; i++) {
+            _lineColorSlots[i] = colorSlots[i];
+        }
+        RefreshAllPlatformVisuals();
     }
 
     void HandleState(Vector2 ballPos, IList<float> paddleAngles)
@@ -201,14 +213,14 @@ public class PongNetView : MonoBehaviour
         for (int i = 0; i < copy; i++) {
             newTarget[i] = _targetAngles[i];
             newDisplay[i] = _displayAngles != null ? _displayAngles[i] : _targetAngles[i];
-            newHealth[i] = _lineHealth != null ? _lineHealth[i] : 0;
+            newHealth[i] = _lineHealth != null ? _lineHealth[i] : CircleArenaConfig.HealthIntact;
         }
 
         for (int i = copy; i < count; i++) {
             float angle = CircleArenaConfig.GetInitialAngleRad(i, count);
             newTarget[i] = angle;
             newDisplay[i] = angle;
-            newHealth[i] = 0;
+            newHealth[i] = CircleArenaConfig.HealthIntact;
         }
 
         _targetAngles = newTarget;
@@ -232,14 +244,20 @@ public class PongNetView : MonoBehaviour
         var line = CircleArena.GetPlatformLine(lineIndex);
         if (line == null || !line.gameObject.activeSelf) return;
 
-        int ownedLine = Client != null ? Client.LineIndex : -1;
-        bool isLocal = lineIndex == ownedLine;
-        Color color = isLocal
-            ? CircleArenaConfig.LocalPlatformColor
-            : CircleArenaConfig.RemotePlatformColor;
+        int colorSlot = _lineColorSlots != null && lineIndex >= 0 && lineIndex < _lineColorSlots.Length
+            ? _lineColorSlots[lineIndex]
+            : -1;
 
-        if (_lineHealth != null && lineIndex < _lineHealth.Length && _lineHealth[lineIndex] == 1) {
-            color = ScatteredColor;
+        // Fallback while the first COLORS message hasn't arrived yet — old local/remote
+        // shading keeps the player's own paddle visually distinct until palette info lands.
+        Color color;
+        if (colorSlot >= 0) {
+            color = CircleArenaConfig.GetPaletteColor(colorSlot);
+        } else {
+            int ownedLine = Client != null ? Client.LineIndex : -1;
+            color = lineIndex == ownedLine
+                ? CircleArenaConfig.LocalPlatformColor
+                : CircleArenaConfig.RemotePlatformColor;
         }
 
         CircleArenaConfig.SetArcPlatformColor(line, color);
