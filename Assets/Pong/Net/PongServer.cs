@@ -112,6 +112,10 @@ public class PongServer : MonoBehaviour
     {
         while (_tcp.Pending()) {
             TcpClient tcpClient = _tcp.AcceptTcpClient();
+            // Disable Nagle's algorithm: the game sends many tiny STATE frames at 30Hz, and
+            // Nagle batches them with delayed-ACKs, causing 40-200ms stalls + bursty delivery
+            // that show up as laggy ball/paddle movement on clients.
+            try { tcpClient.NoDelay = true; } catch { /* ignore */ }
             var conn = new ClientConnection { Tcp = tcpClient };
             _connections.Add(conn);
 

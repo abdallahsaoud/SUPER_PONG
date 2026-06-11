@@ -62,6 +62,10 @@ public class PongServerGame : MonoBehaviour
     int _lastBroadcastCountdown = -1;
     float _nextDebugPaddleLogTime;
     float _nextDebugStateLogTime;
+    // #region agent log
+    float _dbgLastBroadcastTime;
+    float _dbgLastHeartbeat;
+    // #endregion
 
     void Awake()
     {
@@ -133,6 +137,24 @@ public class PongServerGame : MonoBehaviour
         if (!_server.IsListening) return;
         EnsureRuntime();
         float dt = Time.unscaledDeltaTime;
+        // #region agent log
+        // A long frame means the WHOLE server loop stalled this tick (ball physics + broadcast).
+        // Capture GC counts so we can attribute the stall to GC pauses vs. blocking socket writes.
+        if (dt > 0.08f) {
+            PongDebugLog.Write("FG", "PongServerGame.cs:135",
+                "server long frame",
+                "{\"frameMs\":" + (dt * 1000f).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"gc0\":" + System.GC.CollectionCount(0)
+                + ",\"gc1\":" + System.GC.CollectionCount(1)
+                + ",\"gc2\":" + System.GC.CollectionCount(2)
+                + ",\"vSync\":" + QualitySettings.vSyncCount
+                + ",\"targetFps\":" + Application.targetFrameRate
+                + ",\"runInBg\":" + (Application.runInBackground ? "true" : "false")
+                + ",\"isFocused\":" + (Application.isFocused ? "true" : "false")
+                + ",\"conns\":" + _server.ConnectionCount + "}");
+        }
+        var _updSw = System.Diagnostics.Stopwatch.StartNew();
+        // #endregion
         int connectedCount = GetAssignedCount();
         int inGameCount = GetInGameCount();
 
@@ -160,6 +182,20 @@ public class PongServerGame : MonoBehaviour
             _stateAccumulator = 0f;
             BroadcastState();
         }
+
+        // #region agent log
+        // If our Update body is fast (~1ms) but frameMs was ~100ms, the stall is OUTSIDE our
+        // code (Unity frame loop / render / vsync / focus), not in game or networking logic.
+        _updSw.Stop();
+        float _bodyMs = (float)_updSw.Elapsed.TotalMilliseconds;
+        if (_bodyMs > 5f) {
+            PongDebugLog.Write("MN", "PongServerGame.cs:184",
+                "server update body slow",
+                "{\"bodyMs\":" + _bodyMs.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"state\":" + (int)_state
+                + ",\"conns\":" + _server.ConnectionCount + "}");
+        }
+        // #endregion
     }
 
     void HandleClientConnected(PongServer.ClientConnection client)
@@ -743,7 +779,31 @@ public class PongServerGame : MonoBehaviour
         for (int i = 0; i < _runtime.Length; i++) {
             angles[i] = _runtime[i].RingAngleRad;
         }
+        // #region agent log
+        var _sw = System.Diagnostics.Stopwatch.StartNew();
+        // #endregion
         _server.Broadcast(PongProtocol.FormatState(_ballPos.x, _ballPos.y, angles));
+        // #region agent log
+        {
+            _sw.Stop();
+            float _writeMs = (float)_sw.Elapsed.TotalMilliseconds;
+            float _now = Time.realtimeSinceStartup;
+            float _gap = _dbgLastBroadcastTime > 0f ? (_now - _dbgLastBroadcastTime) * 1000f : -1f;
+            _dbgLastBroadcastTime = _now;
+            // Log spikes/slow writes, plus a ~2s heartbeat so even a steady run produces
+            // server evidence we can correlate against the client.
+            bool _heartbeat = _now - _dbgLastHeartbeat >= 2f;
+            if (_gap < 0f || _gap > 60f || _writeMs > 5f || _heartbeat) {
+                if (_heartbeat) _dbgLastHeartbeat = _now;
+                PongDebugLog.Write("G", "PongServerGame.cs:746",
+                    "server broadcast state",
+                    "{\"runId\":\"post-fix\",\"sendGapMs\":" + _gap.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
+                    + ",\"writeMs\":" + _writeMs.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
+                    + ",\"heartbeat\":" + (_heartbeat ? "true" : "false")
+                    + ",\"conns\":" + (_server != null ? _server.ConnectionCount : 0) + "}");
+            }
+        }
+        // #endregion
     }
 
     float GetDebugInterval()

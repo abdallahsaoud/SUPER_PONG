@@ -24,6 +24,9 @@ public class PongClient : MonoBehaviour
     readonly PongMessageBuffer _buffer = new PongMessageBuffer();
     readonly byte[] _readBuffer = new byte[4096];
     float _nextDebugStateLogTime;
+    // #region agent log
+    float _dbgLastStateFrameTime;
+    // #endregion
 
     public bool IsConnected => _tcp != null && _tcp.Connected;
 
@@ -139,6 +142,9 @@ public class PongClient : MonoBehaviour
             _tcp = new TcpClient();
             _tcp.ReceiveTimeout = 5000;
             _tcp.SendTimeout = 5000;
+            // Disable Nagle's algorithm so small PADDLE/STATE frames are sent immediately
+            // instead of being batched (Nagle + delayed-ACK cause the laggy movement).
+            _tcp.NoDelay = true;
             var result = _tcp.BeginConnect(DestinationIP, DestinationPort, null, null);
             bool completed = result.AsyncWaitHandle.WaitOne(System.TimeSpan.FromSeconds(5));
             if (!completed || !_tcp.Connected) {
@@ -184,15 +190,36 @@ public class PongClient : MonoBehaviour
 
         try {
             int available = _tcp.Available;
+            // #region agent log
+            int _dbgStateCount = 0;
+            int _dbgTotalMsgs = 0;
+            // #endregion
             while (available > 0) {
                 int toRead = available < _readBuffer.Length ? available : _readBuffer.Length;
                 int read = _tcp.GetStream().Read(_readBuffer, 0, toRead);
                 if (read <= 0) break;
 
                 var messages = _buffer.Append(_readBuffer, read);
+                // #region agent log
+                _dbgTotalMsgs += messages.Count;
+                for (int _di = 0; _di < messages.Count; _di++) {
+                    if (messages[_di] != null && messages[_di].StartsWith(PongProtocol.MsgState)) _dbgStateCount++;
+                }
+                // #endregion
                 for (int i = 0; i < messages.Count; i++) Dispatch(messages[i]);
                 available = _tcp.Available;
             }
+            // #region agent log
+            if (_dbgStateCount > 0) {
+                float _now = Time.realtimeSinceStartup;
+                float _gap = _dbgLastStateFrameTime > 0f ? (_now - _dbgLastStateFrameTime) * 1000f : -1f;
+                _dbgLastStateFrameTime = _now;
+                PongDebugLog.Write("AB", "PongClient.cs:195",
+                    "client receive frame",
+                    "{\"stateMsgs\":" + _dbgStateCount + ",\"totalMsgs\":" + _dbgTotalMsgs
+                    + ",\"gapMsSincePrevStateFrame\":" + _gap.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "}");
+            }
+            // #endregion
         } catch (System.Exception ex) {
             Debug.LogWarning("PongClient read error: " + ex.Message);
             CloseInternal();

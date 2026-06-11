@@ -30,6 +30,9 @@ public class PongNetView : MonoBehaviour
     PongClient _subscribedClient;
     PongNetPaddle _localPaddle;
     int _lastSyncedLineIndex = -2;
+    // #region agent log
+    float _dbgLastStateTime;
+    // #endregion
 
     void OnEnable()
     {
@@ -179,6 +182,24 @@ public class PongNetView : MonoBehaviour
 
     void HandleState(Vector2 ballPos, IList<float> paddleAngles)
     {
+        // #region agent log
+        {
+            float _now = Time.realtimeSinceStartup;
+            float _gap = _dbgLastStateTime > 0f ? (_now - _dbgLastStateTime) * 1000f : -1f;
+            _dbgLastStateTime = _now;
+            float _ballJump = _targetBall.HasValue
+                ? Vector2.Distance(new Vector2(_targetBall.Value.x, _targetBall.Value.y), ballPos)
+                : -1f;
+            float _ballToDisplay = Ball != null
+                ? Vector2.Distance(new Vector2(Ball.position.x, Ball.position.y), ballPos)
+                : -1f;
+            PongDebugLog.Write("C", "PongNetView.cs:181",
+                "HandleState target update",
+                "{\"gapMs\":" + _gap.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"targetJump\":" + _ballJump.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"displayLag\":" + _ballToDisplay.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "}");
+        }
+        // #endregion
         _targetBall = new Vector3(ballPos.x, ballPos.y, Ball != null ? Ball.position.z : 0f);
 
         if (paddleAngles == null) return;
