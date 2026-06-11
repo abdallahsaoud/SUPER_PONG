@@ -9,6 +9,7 @@ public class PongBootstrap : MonoBehaviour
 
     [Header("Arena")]
     public float BallSize = 0.5f;
+    public string BackgroundResourcePath = "PongBackground";
 
     [Header("Networking defaults")]
     [Tooltip("Leave empty for LAN builds — the connect overlay will ask for the host IP.")]
@@ -20,6 +21,7 @@ public class PongBootstrap : MonoBehaviour
 
     [Header("References populated at runtime")]
     public Transform Ball;
+    public Transform Background;
     public Transform[] Paddles;
     public PongCircleArena CircleArena;
     public PongServer Server;
@@ -34,6 +36,7 @@ public class PongBootstrap : MonoBehaviour
         Application.runInBackground = true;
         ApplyCommandLineOverrides();
         EnsureCamera();
+        BuildBackground();
         BuildArenaVisuals();
 
         switch (Mode) {
@@ -86,6 +89,8 @@ public class PongBootstrap : MonoBehaviour
         if (Camera.main != null) {
             Camera.main.orthographic = true;
             Camera.main.orthographicSize = CircleArenaConfig.GetCameraOrthographicSize();
+            Camera.main.backgroundColor = new Color(0.04f, 0.05f, 0.09f);
+            Camera.main.clearFlags = CameraClearFlags.SolidColor;
             return;
         }
 
@@ -97,6 +102,41 @@ public class PongBootstrap : MonoBehaviour
         cam.backgroundColor = new Color(0.04f, 0.05f, 0.09f);
         cam.clearFlags = CameraClearFlags.SolidColor;
         go.transform.position = new Vector3(0f, 0f, -10f);
+    }
+
+    void BuildBackground()
+    {
+        if (string.IsNullOrWhiteSpace(BackgroundResourcePath)) return;
+
+        var texture = Resources.Load<Texture2D>(BackgroundResourcePath);
+        if (texture == null) {
+            Debug.LogWarning("PongBootstrap: background resource not found: " + BackgroundResourcePath);
+            return;
+        }
+
+        var sprite = Sprite.Create(
+            texture,
+            new Rect(0f, 0f, texture.width, texture.height),
+            new Vector2(0.5f, 0.5f),
+            100f);
+
+        var go = new GameObject("PongBackground");
+        go.transform.SetParent(transform, false);
+        go.transform.position = new Vector3(0f, 0f, 2f);
+
+        var renderer = go.AddComponent<SpriteRenderer>();
+        renderer.sprite = sprite;
+        renderer.sortingOrder = -1000;
+
+        float worldHeight = CircleArenaConfig.GetCameraOrthographicSize() * 2f;
+        float aspect = Camera.main != null ? Camera.main.aspect : (16f / 9f);
+        float worldWidth = worldHeight * aspect;
+        float spriteWidth = texture.width / 100f;
+        float spriteHeight = texture.height / 100f;
+        float scale = Mathf.Max(worldWidth / spriteWidth, worldHeight / spriteHeight);
+        go.transform.localScale = Vector3.one * scale;
+
+        Background = go.transform;
     }
 
     void BuildArenaVisuals()
