@@ -15,3 +15,8 @@ build*.app/
 *.0.2.zip
 *.zip
 /UserSettings/
+
+# OS / Editor cruft
+.DS_Store
+/Assets/_Recovery/
+/Assets/_Recovery.meta
