@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SUPER PONG — Menu Mockups v2 (Pong-themed)</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a1f;
+    color: #eee;
+    padding: 24px;
+  }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  p.sub { color: #888; margin-top: 0; margin-bottom: 24px; }
+
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .tab-btn {
+    background: #2a2a32;
+    color: #ccc;
+    border: 1px solid #3a3a44;
+    padding: 10px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .tab-btn.active {
+    background: #4f5bff;
+    border-color: #4f5bff;
+    color: #fff;
+  }
+
+  .theme { display: none; }
+  .theme.active { display: block; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 24px;
+  }
+  .frame {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #333;
+  }
+  .frame-label {
+    font-size: 12px;
+    color: #888;
+    margin: 0 0 6px 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .screen {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16/10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  /* ====================================================
+     THEME A: COURT OVERLAY
+     Menus drawn over the actual circular/linear court,
+     with the dashed center line, ball + paddles visible
+     behind a translucent panel. Pixel font for that
+     "real pong" feel.
+  ==================================================== */
+  @font-face {
+    font-family: 'PressStart2PFallback';
+    src: local('Courier New');
+  }
+  .court .screen {
+    background: #000;
+    font-family: 'Courier New', monospace;
+  }
+  /* dashed center net */
+  .court .net {
+    position: absolute;
+    top: 0; bottom: 0; left: 50%;
+    width: 4px;
+    background: repeating-linear-gradient(180deg, #fff 0px, #fff 14px, transparent 14px, transparent 28px);
+    transform: translateX(-50%);
+    opacity: 0.5;
+  }
+  .court .ball {
+    position: absolute;
+    width: 14px; height: 14px;
+    background: #fff;
+    top: 18%; left: 60%;
+    box-shadow: 0 0 8px #fff;
+  }
+  .court .paddle {
+    position: absolute;
+    width: 8px; height: 50px;
+    background: #fff;
+  }
+  .court .paddle.left { left: 14px; top: 35%; }
+  .court .paddle.right { right: 14px; top: 50%; }
+  .court .panel {
+    position: relative;
+    background: rgba(0,0,0,0.78);
+    border: 2px solid #fff;
+    padding: 22px 28px;
+    width: 76%;
+    text-align: center;
+    z-index: 2;
+  }
+  .court .title {
+    font-size: 20px;
+    font-weight: bold;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    color: #fff;
+  }
+  .court .label { color: #888; font-size: 11px; text-align: left; margin: 10px 0 4px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .court input {
+    width: 100%;
+    background: #000;
+    border: 1px solid #fff;
+    color: #fff;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+  }
+  .court .btn {
+    margin-top: 14px;
+    background: #fff;
+    color: #000;
+    border: none;
+    padding: 10px 24px;
+    font-family: inherit;
+    font-weight: bold;
+    letter-spacing: 0.15em;
+    cursor: pointer;
+    text-transform: uppercase;
+    font-size: 13px;
+    width: 100%;
+    clip-path: polygon(0 0, 100% 0, 100% 70%, 96% 100%, 0 100%);
+  }
+  .court .btn.secondary {
+    background: transparent;
+    border: 1px solid #fff;
+    color: #fff;
+  }
+  .court .body-text { color: #ccc; font-size: 13px; line-height: 1.6; margin: 10px 0; }
+  .court .countdown-num { font-size: 64px; font-weight: bold; color: #fff; text-shadow: 0 0 12px #fff; }
+  .court .scoreline { display:flex; justify-content:space-around; align-items:center; margin: 12px 0; font-size: 28px; font-weight:bold; }
+  .court .scoreline .vs { font-size: 14px; color: #666; }
+  .court .winner-tag { display:inline-block; border: 1px solid #fff; padding: 3px 12px; font-size: 11px; letter-spacing: 0.2em; margin-bottom: 10px; }
+
+
+  /* ====================================================
+     THEME B: SCOREBOARD ARCADE
+     Big 7-segment digital scoreboard digits, dark green
+     "court turf" felt, amber/red LED accents — like an
+     arcade cabinet scoreboard.
+  ==================================================== */
+  .scoreboard .screen {
+    background:
+      radial-gradient(ellipse at center, #173a1f 0%, #0a1a0e 80%);
+    font-family: 'Segoe UI', sans-serif;
+  }
+  .scoreboard .panel {
+    background: #0c0f0c;
+    border: 6px solid #2b2f2b;
+    border-radius: 6px;
+    padding: 22px 26px;
+    width: 76%;
+    text-align: center;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.8), 0 4px 20px rgba(0,0,0,0.5);
+  }
+  .scoreboard .title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: #ffb000;
+    text-shadow: 0 0 6px #ffb000;
+    margin-bottom: 14px;
+  }
+  .seg-font {
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    color: #ff3b30;
+    text-shadow: 0 0 8px #ff3b30, 0 0 2px #ff3b30;
+    letter-spacing: 0.05em;
+  }
+  .scoreboard .label { color: #6f9f6f; font-size: 11px; text-align: left; margin: 10px 0 4px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .scoreboard input {
+    width: 100%;
+    background: #050705;
+    border: 1px solid #2b2f2b;
+    color: #ffb000;
+    padding: 9px 12px;
+    font-family: inherit;
+    font-size: 14px;
+    border-radius: 4px;
+  }
+  .scoreboard .btn {
+    margin-top: 14px;
+    background: #ffb000;
+    color: #1a1300;
+    border: none;
+    padding: 11px 24px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    text-transform: uppercase;
+    font-size: 13px;
+    width: 100%;
+    border-radius: 4px;
+    box-shadow: 0 0 10px rgba(255,176,0,0.5);
+  }
+  .scoreboard .btn.secondary {
+    background: transparent;
+    border: 1px solid #6f9f6f;
+    color: #cdeccd;
+    box-shadow: none;
+  }
+  .scoreboard .body-text { color: #aacdaa; font-size: 13px; line-height: 1.5; margin: 10px 0; }
+  .scoreboard .countdown-num { font-size: 72px; line-height: 1; }
+  .scoreboard .scoreline { display:flex; justify-content:space-around; align-items:flex-end; margin: 14px 0; }
+  .scoreboard .scoreline .digit { font-size: 46px; line-height:1; }
+  .scoreboard .scoreline .name { font-size: 11px; color: #cdeccd; letter-spacing: 0.1em; text-transform: uppercase; margin-top: 4px; }
+
+
+  /* ====================================================
+     THEME C: PIXEL / 8-BIT
+     Chunky pixel borders, blocky font, bright primary
+     colors on near-black — handheld console feel.
+  ==================================================== */
+  .pixel .screen {
+    background: #0f0f1e;
+    font-family: 'Courier New', monospace;
+    image-rendering: pixelated;
+  }
+  .pixel .panel {
+    background: #1a1a2e;
+    border: 4px solid #fff;
+    box-shadow:
+      0 0 0 4px #1a1a2e,
+      0 0 0 8px #4f5bff,
+      6px 6px 0 8px rgba(0,0,0,0.4);
+    padding: 22px 24px;
+    width: 72%;
+    text-align: center;
+    margin: 8px;
+  }
+  .pixel .title {
+    font-size: 16px;
+    font-weight: bold;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #ffe14d;
+    margin-bottom: 14px;
+    text-shadow: 2px 2px 0 #b3860e;
+  }
+  .pixel .label { color: #8f9bff; font-size: 11px; text-align: left; margin: 10px 0 4px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .pixel input {
+    width: 100%;
+    background: #0f0f1e;
+    border: 2px solid #4f5bff;
+    color: #fff;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+  }
+  .pixel .btn {
+    margin-top: 14px;
+    background: #4f5bff;
+    color: #fff;
+    border: none;
+    padding: 10px 24px;
+    font-family: inherit;
+    font-weight: bold;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    text-transform: uppercase;
+    font-size: 13px;
+    width: 100%;
+    box-shadow: 3px 3px 0 #2c33a8;
+  }
+  .pixel .btn.secondary {
+    background: #1a1a2e;
+    border: 2px solid #fff;
+    color: #fff;
+    box-shadow: 3px 3px 0 #555;
+  }
+  .pixel .body-text { color: #c9c9ff; font-size: 13px; line-height: 1.6; margin: 10px 0; }
+  .pixel .countdown-num { font-size: 56px; font-weight: bold; color: #ffe14d; text-shadow: 3px 3px 0 #b3860e; }
+  .pixel .scoreline { display:flex; justify-content:space-around; margin: 12px 0; font-size: 22px; font-weight:bold; color: #fff; }
+  .pixel .scoreline span { background:#0f0f1e; border: 2px solid #4f5bff; padding: 6px 12px; }
+  .pixel .winner-tag { display:inline-block; background:#ffe14d; color:#1a1a2e; padding: 4px 10px; font-size: 11px; font-weight:bold; letter-spacing: 0.15em; margin-bottom: 10px; }
+
+  .row { display:flex; gap: 10px; }
+  .row > * { flex: 1; }
+</style>
+</head>
+<body>
+
+<h1>SUPER PONG — Menu Mockups v2 (more "Pong")</h1>
+<p class="sub">Leaning into actual Pong game elements: the dashed center net, paddles/ball, big scoreboard-style score numbers, court colors.</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="showTheme('court')">A. Court Overlay (B&W + net)</button>
+  <button class="tab-btn" onclick="showTheme('scoreboard')">B. Arcade Scoreboard (LED digits)</button>
+  <button class="tab-btn" onclick="showTheme('pixel')">C. 8-Bit Pixel</button>
+</div>
+
+<!-- THEME A -->
+<div class="theme court active" id="theme-court">
+  <div class="grid">
+
+    <div class="frame">
+      <p class="frame-label">Connect Screen</p>
+      <div class="screen">
+        <div class="net"></div>
+        <div class="paddle left"></div>
+        <div class="paddle right"></div>
+        <div class="ball"></div>
+        <div class="panel">
+          <div class="title">Super Pong</div>
+          <div class="label">Your Name</div>
+          <input value="Player">
+          <div class="row">
+            <div>
+              <div class="label">Server IP</div>
+              <input value="192.168.1.42">
+            </div>
+            <div>
+              <div class="label">Port</div>
+              <input value="25000">
+            </div>
+          </div>
+          <button class="btn">▶ Connect</button>
+          <div class="body-text">not connected</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Awaiting Players</p>
+      <div class="screen">
+        <div class="net"></div>
+        <div class="paddle left"></div>
+        <div class="ball"></div>
+        <div class="panel">
+          <div class="title">Waiting for Opponent</div>
+          <div class="scoreline"><span>1</span><span class="vs">vs</span><span>?</span></div>
+          <div class="body-text">Match starts as soon as another player joins.</div>
+          <button class="btn secondary">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">You've Lost</p>
+      <div class="screen">
+        <div class="net"></div>
+        <div class="paddle right"></div>
+        <div class="ball" style="left:20%; top:55%;"></div>
+        <div class="panel">
+          <div class="winner-tag">Eliminated</div>
+          <div class="title">You've Lost</div>
+          <div class="body-text">Leave the server, or keep watching until this match ends.</div>
+          <button class="btn">Keep Watching</button>
+          <button class="btn secondary" style="margin-top:8px;">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Match Over</p>
+      <div class="screen">
+        <div class="net"></div>
+        <div class="panel">
+          <div class="winner-tag">Match Over</div>
+          <div class="title">Alex Wins!</div>
+          <div class="scoreline"><span>5<br><small style="font-size:10px;color:#888;">ALEX</small></span><span class="vs">—</span><span>3<br><small style="font-size:10px;color:#888;">YOU</small></span><span class="vs">—</span><span>2<br><small style="font-size:10px;color:#888;">SAM</small></span></div>
+          <button class="btn">Stay For Next Match</button>
+          <button class="btn secondary" style="margin-top:8px;">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Restart Countdown</p>
+      <div class="screen">
+        <div class="net"></div>
+        <div class="ball" style="left:50%; top:50%; transform: translate(-50%,-50%);"></div>
+        <div class="panel" style="width:46%;">
+          <div class="title" style="font-size:13px;">Match Starts In</div>
+          <div class="countdown-num">3</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- THEME B -->
+<div class="theme scoreboard" id="theme-scoreboard">
+  <div class="grid">
+
+    <div class="frame">
+      <p class="frame-label">Connect Screen</p>
+      <div class="screen">
+        <div class="panel">
+          <div class="title">— Super Pong —</div>
+          <div class="label">Your Name</div>
+          <input value="Player">
+          <div class="row">
+            <div>
+              <div class="label">Server IP</div>
+              <input value="192.168.1.42">
+            </div>
+            <div>
+              <div class="label">Port</div>
+              <input value="25000">
+            </div>
+          </div>
+          <button class="btn">Connect</button>
+          <div class="body-text">not connected</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Awaiting Players</p>
+      <div class="screen">
+        <div class="panel">
+          <div class="title">Lobby</div>
+          <div class="scoreline">
+            <div><div class="digit seg-font">1</div><div class="name">Joined</div></div>
+            <div><div class="digit seg-font" style="color:#3a3f3a; text-shadow:none;">2</div><div class="name">Needed</div></div>
+          </div>
+          <div class="body-text">Waiting for another player to start the match.</div>
+          <button class="btn secondary">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">You've Lost</p>
+      <div class="screen">
+        <div class="panel">
+          <div class="title" style="color:#ff3b30; text-shadow:0 0 6px #ff3b30;">You've Lost</div>
+          <div class="body-text">Leave the server, or keep watching until this match ends.</div>
+          <button class="btn">Keep Watching</button>
+          <button class="btn secondary" style="margin-top:8px;">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Match Over</p>
+      <div class="screen">
+        <div class="panel">
+          <div class="title">Match Over</div>
+          <div class="scoreline">
+            <div><div class="digit seg-font">5</div><div class="name">Alex</div></div>
+            <div><div class="digit seg-font">3</div><div class="name">You</div></div>
+            <div><div class="digit seg-font">2</div><div class="name">Sam</div></div>
+          </div>
+          <div class="body-text" style="color:#ffb000; font-weight:bold;">ALEX WINS</div>
+          <button class="btn">Stay For Next Match</button>
+          <button class="btn secondary" style="margin-top:8px;">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Restart Countdown</p>
+      <div class="screen">
+        <div class="panel" style="width:46%;">
+          <div class="title">Starting In</div>
+          <div class="countdown-num seg-font">3</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- THEME C -->
+<div class="theme pixel" id="theme-pixel">
+  <div class="grid">
+
+    <div class="frame">
+      <p class="frame-label">Connect Screen</p>
+      <div class="screen">
+        <div class="panel">
+          <div class="title">★ Super Pong ★</div>
+          <div class="label">Your Name</div>
+          <input value="Player">
+          <div class="row">
+            <div>
+              <div class="label">Server IP</div>
+              <input value="192.168.1.42">
+            </div>
+            <div>
+              <div class="label">Port</div>
+              <input value="25000">
+            </div>
+          </div>
+          <button class="btn">Connect</button>
+          <div class="body-text">not connected</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Awaiting Players</p>
+      <div class="screen">
+        <div class="panel">
+          <div class="title">Lobby 1/2</div>
+          <div class="body-text">Waiting for another<br>player to join...</div>
+          <button class="btn secondary">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">You've Lost</p>
+      <div class="screen">
+        <div class="panel">
+          <div class="title" style="color:#ff5d5d;">Game Over</div>
+          <div class="body-text">You've lost this round.</div>
+          <button class="btn">Keep Watching</button>
+          <button class="btn secondary" style="margin-top:8px;">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Match Over</p>
+      <div class="screen">
+        <div class="panel">
+          <div class="winner-tag">Winner</div>
+          <div class="title">Alex!</div>
+          <div class="scoreline"><span>5</span><span>3</span><span>2</span></div>
+          <button class="btn">Stay For Next Match</button>
+          <button class="btn secondary" style="margin-top:8px;">Leave Server</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <p class="frame-label">Restart Countdown</p>
+      <div class="screen">
+        <div class="panel" style="width:46%;">
+          <div class="title" style="font-size:12px;">Starts In</div>
+          <div class="countdown-num">3</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  function showTheme(name) {
+    document.querySelectorAll('.theme').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+    document.getElementById('theme-' + name).classList.add('active');
+    event.target.classList.add('active');
+  }
+</script>
+
+</body>
+</html>

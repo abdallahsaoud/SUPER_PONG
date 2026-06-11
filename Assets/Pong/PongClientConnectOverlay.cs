@@ -13,12 +13,6 @@ public class PongClientConnectOverlay : MonoBehaviour
     public PongClient Client;
     public PongNetView View;
 
-    [TextArea(2, 4)]
-    public string HelpText =
-        "Enter the host PC's LAN IP (not 127.0.0.1).\n" +
-        "Host: run Server build first, note IP from console (ipconfig / ifconfig).\n" +
-        "Same Wi‑Fi, firewall must allow TCP port 25000 on the host.";
-
     string _ip = string.Empty;
     string _portText = PongNetworkUtil.DefaultPort.ToString();
     string _playerName = "Player";
@@ -37,11 +31,32 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     PongClient _boundClient;
 
+    // 8-bit pixel theme palette.
+    static readonly Color PixelNavy = new Color(0.102f, 0.102f, 0.180f);      // panel fill
+    static readonly Color PixelInputNavy = new Color(0.059f, 0.059f, 0.118f); // input fill
+    static readonly Color PixelBlue = new Color(0.310f, 0.357f, 1f);          // accent / shadow
+    static readonly Color PixelYellow = new Color(1f, 0.882f, 0.302f);        // titles
+    static readonly Color PixelRed = new Color(1f, 0.365f, 0.365f);           // danger titles
+    static readonly Color PixelTextLight = new Color(0.788f, 0.788f, 1f);     // body text
+    static readonly Color PixelTextMuted = new Color(0.561f, 0.608f, 1f);     // field labels
+
+    Texture2D _texPanel;
+    Texture2D _texShadow;
+    Texture2D _texButtonPrimary;
+    Texture2D _texButtonSecondary;
+    Texture2D _texInput;
+
     GUIStyle _boxStyle;
     GUIStyle _labelStyle;
+    GUIStyle _fieldLabelStyle;
     GUIStyle _fieldStyle;
     GUIStyle _buttonStyle;
+    GUIStyle _secondaryButtonStyle;
     GUIStyle _titleStyle;
+    GUIStyle _dangerTitleStyle;
+
+    Font _pixelFont;
+    float _uiScale = 1f;
 
     Texture2D _swatchTexture;
 
@@ -284,9 +299,10 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     void DrawLeaveCornerButton()
     {
-        float w = 130f;
-        float h = 30f;
-        var rect = new Rect(Screen.width - w - 12f, 12f, w, h);
+        float w = Scaled(170f);
+        float h = Scaled(42f);
+        float margin = Scaled(16f);
+        var rect = new Rect(Screen.width - w - margin, margin, w, h);
         if (GUI.Button(rect, "Leave server", _buttonStyle)) {
             LeaveServer();
         }
@@ -294,135 +310,130 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     void DrawRestartCountdownPanel()
     {
-        float w = 320f;
-        float h = 64f;
-        var rect = new Rect((Screen.width - w) * 0.5f, Screen.height * 0.2f, w, h);
-        GUI.Box(rect, string.Empty, _boxStyle);
+        float w = Scaled(480f);
+        float h = Scaled(150f);
+        var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+        DrawPixelPanel(rect);
 
-        GUILayout.BeginArea(rect);
-        GUILayout.Space(14);
+        BeginPanelContent(rect, 18f, 22f);
         string text = Client != null && Client.IsJoinLobbyCountdown
             ? "Waiting for potential new players: " + _restartCountdownSeconds + "…"
             : "Match starts in " + _restartCountdownSeconds + "…";
-        GUILayout.Label(text, _titleStyle);
-        GUILayout.EndArea();
+        GUILayout.Label(text.ToUpperInvariant(), _titleStyle);
+        EndPanelContent(22f);
     }
 
     void DrawAwaitingPlayersPanel()
     {
         // Centered panel with an explicit "Leave server" escape: without it, a player who
         // stayed after an opponent disconnected would be stranded here with no way to act.
-        float w = 360f;
-        float h = 168f;
+        float w = Scaled(480f);
+        float h = Scaled(270f);
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-        GUI.Box(rect, string.Empty, _boxStyle);
+        DrawPixelPanel(rect);
 
-        GUILayout.BeginArea(rect);
-        GUILayout.Space(18);
-        GUILayout.Label("Awaiting more players to start…", _titleStyle);
-        GUILayout.Space(16);
+        BeginPanelContent(rect);
+        GUILayout.Label("LOBBY", _titleStyle);
+        GUILayout.Space(Scaled(16));
         GUILayout.Label(
             "Waiting for someone else to join before the next match.",
             _labelStyle);
-        GUILayout.Space(12);
-        if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
+        GUILayout.Space(Scaled(16));
+        if (GUILayout.Button("Leave server", _secondaryButtonStyle, GUILayout.Height(Scaled(50)))) {
             LeaveServer();
         }
-        GUILayout.EndArea();
+        EndPanelContent();
     }
 
     void DrawConnectPanel()
     {
-        float w = 420f;
-        float h = 340f;
+        float w = Scaled(580f);
+        float h = Scaled(450f);
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-        GUI.Box(rect, "Connect to server", _boxStyle);
+        DrawPixelPanel(rect);
 
-        GUILayout.BeginArea(rect);
-        GUILayout.Space(28);
-        GUILayout.Label(HelpText, _labelStyle);
-        GUILayout.Space(8);
-        GUILayout.Label("Your name", _labelStyle);
-        _playerName = GUILayout.TextField(_playerName, _fieldStyle, GUILayout.Height(28));
-        GUILayout.Label("Server IP", _labelStyle);
-        _ip = GUILayout.TextField(_ip, _fieldStyle, GUILayout.Height(28));
-        GUILayout.Label("Port", _labelStyle);
-        _portText = GUILayout.TextField(_portText, _fieldStyle, GUILayout.Height(28));
-        GUILayout.Space(8);
+        BeginPanelContent(rect);
+        GUILayout.Label("★ Super Pong ★", _titleStyle);
+        GUILayout.Space(Scaled(14));
+        GUILayout.Label("YOUR NAME", _fieldLabelStyle);
+        _playerName = GUILayout.TextField(_playerName, _fieldStyle, GUILayout.Height(Scaled(40)));
+        GUILayout.Label("SERVER IP", _fieldLabelStyle);
+        _ip = GUILayout.TextField(_ip, _fieldStyle, GUILayout.Height(Scaled(40)));
+        GUILayout.Label("PORT", _fieldLabelStyle);
+        _portText = GUILayout.TextField(_portText, _fieldStyle, GUILayout.Height(Scaled(40)));
+        GUILayout.Space(Scaled(14));
 
-        if (GUILayout.Button("Connect", _buttonStyle, GUILayout.Height(36))) {
+        if (GUILayout.Button("Connect", _buttonStyle, GUILayout.Height(Scaled(50)))) {
             TryConnect();
         }
 
-        GUILayout.Space(6);
+        GUILayout.Space(Scaled(8));
         GUILayout.Label(_status, _labelStyle);
-        GUILayout.EndArea();
+        EndPanelContent();
     }
 
     void DrawLostPanel()
     {
-        float w = 380f;
-        float h = 220f;
+        float w = Scaled(500f);
+        float h = Scaled(340f);
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-        GUI.Box(rect, string.Empty, _boxStyle);
+        DrawPixelPanel(rect);
 
         DrawLocalColorSwatch(rect);
 
-        GUILayout.BeginArea(rect);
-        GUILayout.Space(16);
-        GUILayout.Label("You've lost", _titleStyle);
-        GUILayout.Space(12);
+        BeginPanelContent(rect, 44f);
+        GUILayout.Label("Game Over", _dangerTitleStyle);
+        GUILayout.Space(Scaled(16));
         GUILayout.Label(
             "Leave the server or keep watching until this match ends.",
             _labelStyle);
-        GUILayout.Space(16);
+        GUILayout.Space(Scaled(22));
 
-        if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
-            LeaveServer();
-        }
-
-        GUILayout.Space(8);
-
-        if (GUILayout.Button("Keep watching", _buttonStyle, GUILayout.Height(36))) {
+        if (GUILayout.Button("Keep watching", _buttonStyle, GUILayout.Height(Scaled(50)))) {
             _spectating = true;
             ConfirmSpectateOnly();
         }
 
-        GUILayout.EndArea();
+        GUILayout.Space(Scaled(11));
+
+        if (GUILayout.Button("Leave server", _secondaryButtonStyle, GUILayout.Height(Scaled(50)))) {
+            LeaveServer();
+        }
+
+        EndPanelContent();
     }
 
     void DrawMatchOverPanel()
     {
-        float w = 400f;
-        float h = 240f;
+        float w = Scaled(520f);
+        float h = Scaled(360f);
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-        GUI.Box(rect, string.Empty, _boxStyle);
+        DrawPixelPanel(rect);
 
         DrawLocalColorSwatch(rect);
 
-        GUILayout.BeginArea(rect);
-        GUILayout.Space(16);
-        GUILayout.Label(GetMatchOverTitle(), _titleStyle);
-        GUILayout.Space(12);
+        BeginPanelContent(rect, 44f);
+        GUILayout.Label(GetMatchOverTitle().ToUpperInvariant(), _titleStyle);
+        GUILayout.Space(Scaled(16));
         GUILayout.Label(
             "Leave the server or stay connected for the next match.",
             _labelStyle);
-        GUILayout.Space(16);
+        GUILayout.Space(Scaled(22));
 
-        if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
+        if (GUILayout.Button("Leave server", _secondaryButtonStyle, GUILayout.Height(Scaled(50)))) {
             LeaveServer();
         }
 
-        GUILayout.Space(8);
+        GUILayout.Space(Scaled(11));
 
         if (_awaitingNextMatch) {
             GUILayout.Label(GetAwaitingNextMatchText(), _labelStyle);
-        } else if (GUILayout.Button("Stay for next match", _buttonStyle, GUILayout.Height(36))) {
+        } else if (GUILayout.Button("Stay for next match", _buttonStyle, GUILayout.Height(Scaled(50)))) {
             ConfirmReadyForNextMatch();
             _awaitingNextMatch = true;
         }
 
-        GUILayout.EndArea();
+        EndPanelContent();
     }
 
     string GetAwaitingNextMatchText()
@@ -505,8 +516,8 @@ public class PongClientConnectOverlay : MonoBehaviour
         Color color = CircleArenaConfig.GetPaletteColor(slot);
         string label = CircleArenaConfig.GetPaletteColorName(slot);
 
-        const float padding = 10f;
-        const float swatchSize = 18f;
+        float padding = Scaled(14f);
+        float swatchSize = Scaled(24f);
         var swatchRect = new Rect(panelRect.x + padding, panelRect.y + padding, swatchSize, swatchSize);
 
         Color prev = GUI.color;
@@ -515,11 +526,12 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUI.color = prev;
 
         if (!string.IsNullOrEmpty(label)) {
+            float gap = Scaled(8f);
             var labelRect = new Rect(
-                swatchRect.xMax + 6f,
-                swatchRect.y - 2f,
-                panelRect.width - swatchSize - padding * 2f - 6f,
-                swatchSize + 4f);
+                swatchRect.xMax + gap,
+                swatchRect.y - Scaled(3f),
+                panelRect.width - swatchSize - padding * 2f - gap,
+                swatchSize + Scaled(6f));
             GUI.Label(labelRect, "You: " + label, _labelStyle);
         }
     }
@@ -532,19 +544,150 @@ public class PongClientConnectOverlay : MonoBehaviour
         }
     }
 
+    float Scaled(float value) => value * _uiScale;
+
     void EnsureStyles()
     {
         if (_stylesReady) return;
         _stylesReady = true;
 
-        _boxStyle = new GUIStyle(GUI.skin.box) { fontSize = 16, alignment = TextAnchor.UpperCenter };
+        // Tie overlay size to the visible arena ring rather than an arbitrary screen
+        // fraction: the orthographic camera maps 2*GetCameraOrthographicSize() world
+        // units to Screen.height pixels, so the arena circle (diameter = 2*Radius)
+        // occupies (Radius / orthoSize) * Screen.height pixels. Scale so even the
+        // smallest panel (480px reference) is at least that big, never shrinking
+        // below the 1x baseline.
+        float circleDiameterPx = (CircleArenaConfig.Radius / CircleArenaConfig.GetCameraOrthographicSize()) * Screen.height;
+        const float ReferencePanelWidth = 480f;
+        _uiScale = Mathf.Max(1f, circleDiameterPx / ReferencePanelWidth);
+
+        _pixelFont = Resources.Load<Font>("Fonts/VT323-Regular");
+
+        int PanelTexSize = Mathf.RoundToInt(24 * _uiScale);
+        int PanelBorderPx = Mathf.RoundToInt(6 * _uiScale);
+        int ControlTexSize = Mathf.RoundToInt(20 * _uiScale);
+        int ControlBorderPx = Mathf.RoundToInt(3 * _uiScale);
+        _texPanel = MakeBorderedTexture(PanelTexSize, PanelBorderPx, PixelNavy, Color.white);
+        _texShadow = MakeSolidTexture(PixelBlue);
+        _texButtonPrimary = MakeBorderedTexture(ControlTexSize, ControlBorderPx, PixelBlue, Color.white);
+        _texButtonSecondary = MakeBorderedTexture(ControlTexSize, ControlBorderPx, PixelNavy, Color.white);
+        _texInput = MakeBorderedTexture(ControlTexSize, ControlBorderPx, PixelInputNavy, PixelBlue);
+
+        _boxStyle = new GUIStyle {
+            normal = { background = _texPanel },
+            border = new RectOffset(PanelBorderPx, PanelBorderPx, PanelBorderPx, PanelBorderPx),
+        };
+
         _titleStyle = new GUIStyle(GUI.skin.label) {
-            fontSize = 20,
+            font = _pixelFont,
+            fontSize = Mathf.RoundToInt(32 * _uiScale),
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleCenter,
+            wordWrap = true,
+            normal = { textColor = PixelYellow },
         };
-        _labelStyle = new GUIStyle(GUI.skin.label) { fontSize = 14, wordWrap = true };
-        _fieldStyle = new GUIStyle(GUI.skin.textField) { fontSize = 14 };
-        _buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 15 };
+        _dangerTitleStyle = new GUIStyle(_titleStyle) {
+            normal = { textColor = PixelRed },
+        };
+
+        _labelStyle = new GUIStyle(GUI.skin.label) {
+            font = _pixelFont,
+            fontSize = Mathf.RoundToInt(19 * _uiScale),
+            wordWrap = true,
+            alignment = TextAnchor.MiddleCenter,
+            normal = { textColor = PixelTextLight },
+        };
+        _fieldLabelStyle = new GUIStyle(GUI.skin.label) {
+            font = _pixelFont,
+            fontSize = Mathf.RoundToInt(16 * _uiScale),
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleLeft,
+            normal = { textColor = PixelTextMuted },
+        };
+
+        int fieldPadH = Mathf.RoundToInt(10 * _uiScale);
+        int fieldPadV = Mathf.RoundToInt(6 * _uiScale);
+        _fieldStyle = new GUIStyle(GUI.skin.textField) {
+            font = _pixelFont,
+            fontSize = Mathf.RoundToInt(20 * _uiScale),
+            border = new RectOffset(ControlBorderPx, ControlBorderPx, ControlBorderPx, ControlBorderPx),
+            padding = new RectOffset(fieldPadH, fieldPadH, fieldPadV, fieldPadV),
+            normal = { background = _texInput, textColor = Color.white },
+            focused = { background = _texInput, textColor = Color.white },
+        };
+
+        _buttonStyle = new GUIStyle(GUI.skin.button) {
+            font = _pixelFont,
+            fontSize = Mathf.RoundToInt(20 * _uiScale),
+            fontStyle = FontStyle.Bold,
+            border = new RectOffset(ControlBorderPx, ControlBorderPx, ControlBorderPx, ControlBorderPx),
+            normal = { background = _texButtonPrimary, textColor = Color.white },
+            hover = { background = _texButtonPrimary, textColor = Color.white },
+            active = { background = _texButtonPrimary, textColor = PixelYellow },
+        };
+        _secondaryButtonStyle = new GUIStyle(_buttonStyle) {
+            normal = { background = _texButtonSecondary, textColor = Color.white },
+            hover = { background = _texButtonSecondary, textColor = Color.white },
+            active = { background = _texButtonSecondary, textColor = PixelYellow },
+        };
+    }
+
+    static Texture2D MakeSolidTexture(Color color)
+    {
+        // Our palette constants are hex-derived sRGB values (e.g. 0.102 == #1a). In this
+        // project's Linear color space, IMGUI gamma-encodes texture values for display, so
+        // feeding it the sRGB value directly re-encodes it again and washes it out (navy ->
+        // mid-gray). Pre-convert with .linear so the single encode lands back on the hex color.
+        var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        Color c = color.linear;
+        tex.SetPixels(new[] { c, c, c, c });
+        tex.Apply(false);
+        tex.filterMode = FilterMode.Point;
+        return tex;
+    }
+
+    static Texture2D MakeBorderedTexture(int size, int borderPx, Color fill, Color border)
+    {
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        Color fillLinear = fill.linear;
+        Color borderLinear = border.linear;
+        var pixels = new Color[size * size];
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                bool edge = x < borderPx || y < borderPx || x >= size - borderPx || y >= size - borderPx;
+                pixels[y * size + x] = edge ? borderLinear : fillLinear;
+            }
+        }
+        tex.SetPixels(pixels);
+        tex.Apply(false);
+        tex.filterMode = FilterMode.Point;
+        return tex;
+    }
+
+    // Draws the chunky pixel-art panel: an offset blue "shadow" block behind a
+    // white-bordered navy box.
+    void DrawPixelPanel(Rect rect)
+    {
+        float offset = Scaled(11f);
+        var shadowRect = new Rect(rect.x + offset, rect.y + offset, rect.width, rect.height);
+        GUI.DrawTexture(shadowRect, _texShadow);
+        GUI.Box(rect, GUIContent.none, _boxStyle);
+    }
+
+    void BeginPanelContent(Rect rect, float topPad = 27f, float sidePad = 27f)
+    {
+        GUILayout.BeginArea(rect);
+        GUILayout.Space(Scaled(topPad));
+        GUILayout.BeginHorizontal();
+        GUILayout.Space(Scaled(sidePad));
+        GUILayout.BeginVertical();
+    }
+
+    void EndPanelContent(float sidePad = 27f)
+    {
+        GUILayout.EndVertical();
+        GUILayout.Space(Scaled(sidePad));
+        GUILayout.EndHorizontal();
+        GUILayout.EndArea();
     }
 }
