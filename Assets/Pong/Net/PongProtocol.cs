@@ -16,7 +16,7 @@ using System.Text;
 ///   SPECTATE                                   (player is watching only, not queued)
 ///
 /// Server -> Client:
-///   ASSIGN <lineIndex> <lineCount>
+///   ASSIGN <lineIndex> <lineCount> <ringAngleRadians>
 ///   NAMES <name0><tab><name1>...               (tab-separated, one per line slot)
 ///   COLORS <slot0> <slot1> ... <slotN-1>       (palette index per line; -1 = unassigned)
 ///   ROSTER <lineCount>
@@ -119,8 +119,12 @@ public static class PongProtocol
     public static string FormatPaddle(float y)
         => MsgPaddle + FieldSeparator + y.ToString("0.###", Inv) + MessageDelimiter;
 
-    public static string FormatAssign(int lineIndex, int lineCount)
-        => MsgAssign + FieldSeparator + lineIndex.ToString(Inv) + FieldSeparator + lineCount.ToString(Inv) + MessageDelimiter;
+    public static string FormatAssign(int lineIndex, int lineCount, float ringAngleRad)
+        => MsgAssign
+            + FieldSeparator + lineIndex.ToString(Inv)
+            + FieldSeparator + lineCount.ToString(Inv)
+            + FieldSeparator + ringAngleRad.ToString("0.###", Inv)
+            + MessageDelimiter;
 
     public static string FormatState(float ballX, float ballY, IList<float> paddleYs)
     {

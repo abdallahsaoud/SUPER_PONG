@@ -28,7 +28,7 @@ public class PongClient : MonoBehaviour
     public bool IsConnected => _tcp != null && _tcp.Connected;
 
     // Typed events. The values arrive parsed so the rest of the client code stays simple.
-    public delegate void AssignHandler(int lineIndex, int lineCount);
+    public delegate void AssignHandler(int lineIndex, int lineCount, float ringAngleRad);
     public delegate void StateHandler(Vector2 ballPos, IList<float> paddleYs);
     public delegate void ScoreHandler(int lineIndex, int score);
     public delegate void DamageHandler(int lineIndex, int state);
@@ -228,13 +228,20 @@ public class PongClient : MonoBehaviour
                 if (parts.Length >= 3
                     && PongProtocol.TryParseInt(parts[1], out int idx)
                     && PongProtocol.TryParseInt(parts[2], out int count)) {
+                    float ringAngleRad = CircleArenaConfig.GetInitialAngleRad(idx, count);
+                    if (parts.Length >= 4
+                        && PongProtocol.TryParseFloat(parts[3], out float parsedAngle)) {
+                        ringAngleRad = parsedAngle;
+                    }
                     LineIndex = idx;
                     LineCount = count;
                     LastRosterCount = count;
                     if (DebugNetworkLogs) {
-                        Debug.Log("PongClient DBG ASSIGN line=" + idx + " lineCount=" + count);
+                        Debug.Log("PongClient DBG ASSIGN line=" + idx
+                            + " lineCount=" + count
+                            + " angle=" + ringAngleRad.ToString("0.###"));
                     }
-                    OnAssign?.Invoke(idx, count);
+                    OnAssign?.Invoke(idx, count, ringAngleRad);
                 }
                 break;
             }
