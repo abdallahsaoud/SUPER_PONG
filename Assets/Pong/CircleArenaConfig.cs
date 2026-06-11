@@ -19,8 +19,8 @@ public static class CircleArenaConfig
     public const int RingSegments = 96;
     public const float FirstSlotDegrees = 90f;
 
-    public const float DefaultBallSpeed = 4f;
-    public const float MaxBallSpeed = 9f;
+    public const float DefaultBallSpeed = 6f;
+    public const float MaxBallSpeed = 13f;
     public const int WallBouncesBeforeSpeedUp = 5;
     public const float BallSpeedAccelAfterMisses = 1.15f;
     public const float WallBounceAngleJitterDegrees = 12f;
@@ -29,6 +29,46 @@ public static class CircleArenaConfig
     public static readonly Color RingColor = new Color(0.25f, 0.9f, 1f, 0.95f);
     public static readonly Color LocalPlatformColor = new Color(0.95f, 0.98f, 1f, 1f);
     public static readonly Color RemotePlatformColor = new Color(0.72f, 0.78f, 0.88f, 0.62f);
+
+    // Health states. Shared with the server-side authoritative simulation and the wire protocol
+    // (DAMAGE state field). Kept here so client and server can't drift out of sync.
+    public const int HealthIntact = 0;
+    public const int HealthEliminated = 2;
+
+    /// <summary>
+    /// Fixed per-player color palette. Length must match <see cref="MaxPlayers"/> so the server
+    /// can always hand out a unique slot. Order is the assignment priority — the lowest unused
+    /// index is given to a joining player.
+    /// </summary>
+    public static readonly Color[] PlayerPalette = new[] {
+        new Color(0.95f, 0.30f, 0.30f, 1f), // red
+        new Color(0.30f, 0.65f, 1.00f, 1f), // blue
+        new Color(0.45f, 0.90f, 0.40f, 1f), // green
+        new Color(1.00f, 0.85f, 0.25f, 1f), // yellow
+        new Color(0.85f, 0.45f, 1.00f, 1f), // purple
+        new Color(1.00f, 0.55f, 0.10f, 1f), // orange
+        new Color(0.25f, 0.95f, 0.85f, 1f), // cyan
+        new Color(1.00f, 0.55f, 0.80f, 1f), // pink
+    };
+
+    /// <summary>Human-readable names matching <see cref="PlayerPalette"/>, used in UI labels.</summary>
+    public static readonly string[] PlayerPaletteNames = new[] {
+        "Red", "Blue", "Green", "Yellow", "Purple", "Orange", "Cyan", "Pink",
+    };
+
+    public static Color GetPaletteColor(int slot)
+    {
+        if (PlayerPalette.Length == 0) return RemotePlatformColor;
+        if (slot < 0) return RemotePlatformColor;
+        return PlayerPalette[slot % PlayerPalette.Length];
+    }
+
+    public static string GetPaletteColorName(int slot)
+    {
+        if (PlayerPaletteNames.Length == 0) return string.Empty;
+        if (slot < 0) return string.Empty;
+        return PlayerPaletteNames[slot % PlayerPaletteNames.Length];
+    }
 
     public static float GetPlatformArcDegrees(int totalPlayers)
     {

@@ -9,8 +9,6 @@ using System.Collections.Generic;
 public class PongServerGame : MonoBehaviour
 {
     const int MinPlayersToPlay = 2;
-    const int HealthAlive = 0;
-    const int HealthEliminated = 2;
 
     [Header("Ball")]
     public float BallSpeed = CircleArenaConfig.DefaultBallSpeed;
@@ -45,6 +43,7 @@ public class PongServerGame : MonoBehaviour
         public float RingAngleRad;
         public int Health;
         public string DisplayName = string.Empty;
+        public int ColorSlot = -1;
     }
 
     public enum BallState { WaitingForPlayers, LobbyCountdown, Starting, Playing, Won }
@@ -181,8 +180,9 @@ public class PongServerGame : MonoBehaviour
         var rt = _runtime[idx];
         rt.Assigned = true;
         rt.Owner = client;
-        rt.Health = HealthAlive;
+        rt.Health = CircleArenaConfig.HealthIntact;
         rt.DisplayName = ResolveDisplayName(client, idx);
+        rt.ColorSlot = PickUnusedColorSlot(idx);
         RespreadPlayerAngles();
 
         BroadcastRosterAndAssign();
@@ -265,7 +265,7 @@ public class PongServerGame : MonoBehaviour
             if (PongProtocol.TryParseFloat(tail, out float angleRad)) {
                 if (client.LineIndex >= 0 && client.LineIndex < _runtime.Length) {
                     var rt = _runtime[client.LineIndex];
-                    if (rt.Health >= HealthEliminated) return;
+                    if (rt.Health >= CircleArenaConfig.HealthEliminated) return;
                     float clamped = ClampPlatformAngleAgainstPlayers(
                         client.LineIndex,
                         rt.RingAngleRad,
@@ -315,7 +315,7 @@ public class PongServerGame : MonoBehaviour
         ClearAllReadyForNextMatch();
         BroadcastCountdown(0);
         for (int i = 0; i < _runtime.Length; i++) {
-            _runtime[i].Health = HealthAlive;
+            _runtime[i].Health = CircleArenaConfig.HealthIntact;
         }
         BroadcastRosterAndAssign();
         Debug.Log("PongServerGame: MATCH_STARTED");
@@ -535,7 +535,7 @@ public class PongServerGame : MonoBehaviour
 
             for (int i = 0; i < Lines.Count; i++) {
                 var rt = _runtime[i];
-                if (!rt.Assigned || rt.Health >= HealthEliminated) continue;
+                if (!rt.Assigned || rt.Health >= CircleArenaConfig.HealthEliminated) continue;
 
                 if (!CircleArenaConfig.BallHitsPlatform(_ballPos, BallRadius, rt.RingAngleRad, Lines.Count)) continue;
 
@@ -588,7 +588,7 @@ public class PongServerGame : MonoBehaviour
             for (int i = 0; i < _runtime.Length; i++) {
                 if (i == lineIndex) continue;
                 var other = _runtime[i];
-                if (other == null || !other.Assigned || other.Health >= HealthEliminated) continue;
+                if (other == null || !other.Assigned || other.Health >= CircleArenaConfig.HealthEliminated) continue;
 
                 desiredAngleRad = CircleArenaConfig.ClampOutsidePlatform(
                     desiredAngleRad,
@@ -618,6 +618,7 @@ public class PongServerGame : MonoBehaviour
         int count = Lines.Count;
         _server.Broadcast(PongProtocol.FormatRoster(count));
         BroadcastNames();
+        BroadcastColors();
 
         for (int i = 0; i < _runtime.Length; i++) {
             var rt = _runtime[i];
@@ -641,6 +642,44 @@ public class PongServerGame : MonoBehaviour
         _server.Broadcast(PongProtocol.FormatNames(names));
     }
 
+    void BroadcastColors()
+    {
+        if (_runtime == null || _runtime.Length == 0) return;
+        var slots = new int[_runtime.Length];
+        for (int i = 0; i < _runtime.Length; i++) {
+            slots[i] = _runtime[i].Assigned ? _runtime[i].ColorSlot : -1;
+        }
+        _server.Broadcast(PongProtocol.FormatColors(slots));
+    }
+
+    /// <summary>
+    /// Lowest palette index not currently held by another assigned runtime. The newly-joining
+    /// runtime at <paramref name="excludeIndex"/> is skipped because its slot is being decided
+    /// right now. Falls back to a wrap-around index if the palette is somehow exhausted.
+    /// </summary>
+    int PickUnusedColorSlot(int excludeIndex)
+    {
+        var palette = CircleArenaConfig.PlayerPalette;
+        if (palette == null || palette.Length == 0) return -1;
+
+        for (int slot = 0; slot < palette.Length; slot++) {
+            bool taken = false;
+            if (_runtime != null) {
+                for (int i = 0; i < _runtime.Length; i++) {
+                    if (i == excludeIndex) continue;
+                    var other = _runtime[i];
+                    if (other != null && other.Assigned && other.ColorSlot == slot) {
+                        taken = true;
+                        break;
+                    }
+                }
+            }
+            if (!taken) return slot;
+        }
+
+        return excludeIndex % palette.Length;
+    }
+
     void ApplyClientDisplayName(PongServer.ClientConnection client, string rawName)
     {
         string safe = PongProtocol.SanitizePlayerName(rawName);
@@ -662,10 +701,10 @@ public class PongServerGame : MonoBehaviour
     void EliminatePlayer(int lineIndex)
     {
         var rt = _runtime[lineIndex];
-        if (rt.Health >= HealthEliminated) return;
+        if (rt.Health >= CircleArenaConfig.HealthEliminated) return;
 
-        rt.Health = HealthEliminated;
-        _server.Broadcast(PongProtocol.FormatDamage(lineIndex, HealthEliminated));
+        rt.Health = CircleArenaConfig.HealthEliminated;
+        _server.Broadcast(PongProtocol.FormatDamage(lineIndex, CircleArenaConfig.HealthEliminated));
         Debug.Log("PongServerGame: line " + lineIndex + " eliminated.");
         CheckForLastPlayerStanding();
     }
@@ -675,7 +714,7 @@ public class PongServerGame : MonoBehaviour
         int alive = 0;
         int lastAlive = -1;
         for (int i = 0; i < _runtime.Length; i++) {
-            if (!_runtime[i].Assigned || _runtime[i].Health >= HealthEliminated) continue;
+            if (!_runtime[i].Assigned || _runtime[i].Health >= CircleArenaConfig.HealthEliminated) continue;
             alive++;
             lastAlive = i;
         }
@@ -763,7 +802,7 @@ public class PongServerGame : MonoBehaviour
         if (_runtime == null) return 0;
         int count = 0;
         for (int i = 0; i < _runtime.Length; i++) {
-            if (_runtime[i].Assigned && _runtime[i].Health < HealthEliminated) count++;
+            if (_runtime[i].Assigned && _runtime[i].Health < CircleArenaConfig.HealthEliminated) count++;
         }
         return count;
     }
