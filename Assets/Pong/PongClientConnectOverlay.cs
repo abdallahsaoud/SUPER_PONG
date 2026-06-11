@@ -98,6 +98,9 @@ public class PongClientConnectOverlay : MonoBehaviour
     void HandleDamage(int lineIndex, int state)
     {
         if (state < HealthEliminated) return;
+        // Once the match is over, the match-over popup takes over: don't re-flag the local
+        // player as "lost" (which would otherwise resurface the You've-lost panel).
+        if (_matchOver) return;
         if (Client != null && lineIndex == Client.LineIndex) {
             _lost = true;
             _spectating = false;
@@ -112,9 +115,12 @@ public class PongClientConnectOverlay : MonoBehaviour
         _winnerLine = lineIndex;
         _winnerName = Client != null ? Client.LastWinnerName : string.Empty;
         _matchOver = true;
-        if (Client != null && Client.LineIndex >= 0 && lineIndex != Client.LineIndex) {
-            _lost = true;
-        }
+        // The match is over: the "You've lost" popup (with its Keep watching button) must
+        // not stay up alongside or behind the match-over popup. Clearing _lost / _spectating
+        // here guarantees only the match-over panel renders, even if anything else
+        // re-evaluated those flags afterwards.
+        _lost = false;
+        _spectating = false;
         NotifyPostGameMenu();
     }
 
@@ -213,6 +219,7 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     void SyncLostFromView()
     {
+        if (_matchOver) return;
         if (View != null && View.IsLocalPlayerEliminated()) {
             _lost = true;
             if (!_spectating) NotifyPostGameMenu();
