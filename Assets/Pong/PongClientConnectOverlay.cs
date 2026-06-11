@@ -177,12 +177,6 @@ public class PongClientConnectOverlay : MonoBehaviour
         ClearMatchUiState();
     }
 
-    void GoToMainMenu()
-    {
-        LeaveServer();
-        PongMainMenuNavigation.RequestMainMenu();
-    }
-
     void Update()
     {
         BindClientEvents();
@@ -275,14 +269,24 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     void DrawAwaitingPlayersPanel()
     {
+        // Centered panel with an explicit "Leave server" escape: without it, a player who
+        // stayed after an opponent disconnected would be stranded here with no way to act.
         float w = 360f;
-        float h = 72f;
-        var rect = new Rect((Screen.width - w) * 0.5f, Screen.height * 0.12f, w, h);
+        float h = 168f;
+        var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, string.Empty, _boxStyle);
 
         GUILayout.BeginArea(rect);
         GUILayout.Space(18);
         GUILayout.Label("Awaiting more players to start…", _titleStyle);
+        GUILayout.Space(16);
+        GUILayout.Label(
+            "Waiting for someone else to join before the next match.",
+            _labelStyle);
+        GUILayout.Space(12);
+        if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
+            LeaveServer();
+        }
         GUILayout.EndArea();
     }
 
@@ -317,7 +321,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     void DrawLostPanel()
     {
         float w = 380f;
-        float h = 268f;
+        float h = 220f;
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, string.Empty, _boxStyle);
 
@@ -326,18 +330,12 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Label("You've lost", _titleStyle);
         GUILayout.Space(12);
         GUILayout.Label(
-            "Leave the server, return to the main menu, or keep watching until this match ends.",
+            "Leave the server or keep watching until this match ends.",
             _labelStyle);
         GUILayout.Space(16);
 
         if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
             LeaveServer();
-        }
-
-        GUILayout.Space(8);
-
-        if (GUILayout.Button("Main menu", _buttonStyle, GUILayout.Height(36))) {
-            GoToMainMenu();
         }
 
         GUILayout.Space(8);
@@ -353,7 +351,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     void DrawMatchOverPanel()
     {
         float w = 400f;
-        float h = 288f;
+        float h = 240f;
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, string.Empty, _boxStyle);
 
@@ -362,18 +360,12 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Label(GetMatchOverTitle(), _titleStyle);
         GUILayout.Space(12);
         GUILayout.Label(
-            "Leave the server, return to the main menu, or stay connected for the next match.",
+            "Leave the server or stay connected for the next match.",
             _labelStyle);
         GUILayout.Space(16);
 
         if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
             LeaveServer();
-        }
-
-        GUILayout.Space(8);
-
-        if (GUILayout.Button("Main menu", _buttonStyle, GUILayout.Height(36))) {
-            GoToMainMenu();
         }
 
         GUILayout.Space(8);

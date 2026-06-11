@@ -215,10 +215,17 @@ public class PongServerGame : MonoBehaviour
 
         client.LineIndex = -1;
 
-        if (GetAssignedCount() < MinPlayersToPlay) {
-            EnterWaitingForPlayers("player disconnected");
-        } else {
+        // Mid-match: if only one alive player remains (or zero), end the round with a WIN
+        // for the survivor so they don't get silently dumped into "waiting for players".
+        // Eliminated paddles already don't count as alive, so this also covers the case
+        // where every other player has already lost when the leaver disconnects.
+        if (_state == BallState.Playing) {
             CheckForLastPlayerStanding();
+        }
+
+        if (GetAssignedCount() < MinPlayersToPlay
+            && _state != BallState.WaitingForPlayers) {
+            EnterWaitingForPlayers("player disconnected");
         }
     }
 
