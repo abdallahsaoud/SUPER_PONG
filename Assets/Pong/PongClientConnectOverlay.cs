@@ -229,6 +229,11 @@ public class PongClientConnectOverlay : MonoBehaviour
             return;
         }
 
+        // Always-on escape so no connected state can ever trap the player: even if every other
+        // panel is suppressed (e.g. a stale countdown hides the awaiting panel), this stays
+        // clickable.
+        DrawLeaveCornerButton();
+
         // Once the round is over, everyone (winner or loser) gets the match-over menu so they
         // can opt into the next match. The "you've lost" panel is only for players eliminated
         // while the round is still being played out by others.
@@ -248,6 +253,16 @@ public class PongClientConnectOverlay : MonoBehaviour
 
         if (_restartCountdownSeconds > 0) {
             DrawRestartCountdownPanel();
+        }
+    }
+
+    void DrawLeaveCornerButton()
+    {
+        float w = 130f;
+        float h = 30f;
+        var rect = new Rect(Screen.width - w - 12f, 12f, w, h);
+        if (GUI.Button(rect, "Leave server", _buttonStyle)) {
+            LeaveServer();
         }
     }
 
