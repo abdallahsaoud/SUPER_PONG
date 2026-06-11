@@ -9,7 +9,8 @@ public class PongNetView : MonoBehaviour
     public Transform Ball;
     public PongCircleArena CircleArena;
 
-    public float InterpolationRate = 18f;
+    public float InterpolationRate = 24f;
+    public float BallPredictionSeconds = 0.12f;
 
     public bool IsLineEliminated(int lineIndex)
     {
@@ -27,6 +28,8 @@ public class PongNetView : MonoBehaviour
     public Color ScatteredColor = new Color(1f, 0.55f, 0.1f, 0.85f);
 
     Vector3? _targetBall;
+    Vector3 _targetBallVelocity;
+    float _timeSinceBallState;
     float[] _targetAngles;
     float[] _displayAngles;
     int[] _lineHealth;
@@ -128,6 +131,8 @@ public class PongNetView : MonoBehaviour
     void HandleReset()
     {
         _targetBall = null;
+        _targetBallVelocity = Vector3.zero;
+        _timeSinceBallState = 0f;
         if (_lineHealth == null || CircleArena == null) return;
 
         for (int i = 0; i < _lineHealth.Length; i++) {
@@ -150,9 +155,11 @@ public class PongNetView : MonoBehaviour
         if (!eliminated) ApplyLineVisual(lineIndex);
     }
 
-    void HandleState(Vector2 ballPos, IList<float> paddleAngles)
+    void HandleState(Vector2 ballPos, Vector2 ballVelocity, IList<float> paddleAngles)
     {
         _targetBall = new Vector3(ballPos.x, ballPos.y, Ball != null ? Ball.position.z : 0f);
+        _targetBallVelocity = new Vector3(ballVelocity.x, ballVelocity.y, 0f);
+        _timeSinceBallState = 0f;
 
         if (paddleAngles == null) return;
 
@@ -247,7 +254,10 @@ public class PongNetView : MonoBehaviour
         float t = 1f - Mathf.Exp(-InterpolationRate * Time.deltaTime);
 
         if (Ball != null && _targetBall.HasValue) {
-            Ball.position = Vector3.Lerp(Ball.position, _targetBall.Value, t);
+            _timeSinceBallState += Time.deltaTime;
+            float predictionTime = Mathf.Min(_timeSinceBallState, BallPredictionSeconds);
+            Vector3 predictedBall = _targetBall.Value + _targetBallVelocity * predictionTime;
+            Ball.position = Vector3.Lerp(Ball.position, predictedBall, t);
         }
 
         if (_targetAngles == null || _displayAngles == null) return;

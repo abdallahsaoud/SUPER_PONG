@@ -18,7 +18,7 @@ public class PongServerGame : MonoBehaviour
     public Vector2 BallStart = Vector2.zero;
 
     [Header("Networking")]
-    public float StateUpdateRate = 30f;
+    public float StateUpdateRate = 60f;
     public bool DebugNetworkLogs = false;
     public float DebugLogRate = 1f;
 
@@ -158,7 +158,7 @@ public class PongServerGame : MonoBehaviour
         _stateAccumulator += dt;
         float interval = StateUpdateRate > 0f ? 1f / StateUpdateRate : 0.033f;
         if (_stateAccumulator >= interval) {
-            _stateAccumulator = 0f;
+            _stateAccumulator -= interval;
             BroadcastState();
         }
     }
@@ -672,7 +672,13 @@ public class PongServerGame : MonoBehaviour
         for (int i = 0; i < _runtime.Length; i++) {
             angles[i] = _runtime[i].RingAngleRad;
         }
-        _server.Broadcast(PongProtocol.FormatState(_ballPos.x, _ballPos.y, angles));
+        Vector2 ballVelocity = _ballDir * BallSpeed;
+        _server.Broadcast(PongProtocol.FormatState(
+            _ballPos.x,
+            _ballPos.y,
+            ballVelocity.x,
+            ballVelocity.y,
+            angles));
     }
 
     float GetDebugInterval()

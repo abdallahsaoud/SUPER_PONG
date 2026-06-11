@@ -18,7 +18,7 @@ using System.Text;
 ///   ASSIGN <lineIndex> <lineCount>
 ///   NAMES <name0><tab><name1>...               (tab-separated, one per line slot)
 ///   ROSTER <lineCount>
-///   STATE  <ballX> <ballY> <angle0> <angle1> ... <angleN-1>
+///   STATE  <ballX> <ballY> <ballVelX> <ballVelY> <angle0> <angle1> ... <angleN-1>
 ///   SCORE  <lineIndex> <score>
 ///   DAMAGE <lineIndex> <state>            (state: 0=Intact, 1=Scattered, 2=Broken)
 ///   WIN    <lineIndex> <winnerName>
@@ -119,12 +119,14 @@ public static class PongProtocol
     public static string FormatAssign(int lineIndex, int lineCount)
         => MsgAssign + FieldSeparator + lineIndex.ToString(Inv) + FieldSeparator + lineCount.ToString(Inv) + MessageDelimiter;
 
-    public static string FormatState(float ballX, float ballY, IList<float> paddleYs)
+    public static string FormatState(float ballX, float ballY, float ballVelX, float ballVelY, IList<float> paddleYs)
     {
         var sb = new StringBuilder(64);
         sb.Append(MsgState);
         sb.Append(FieldSeparator).Append(ballX.ToString("0.###", Inv));
         sb.Append(FieldSeparator).Append(ballY.ToString("0.###", Inv));
+        sb.Append(FieldSeparator).Append(ballVelX.ToString("0.###", Inv));
+        sb.Append(FieldSeparator).Append(ballVelY.ToString("0.###", Inv));
         for (int i = 0; i < paddleYs.Count; i++) {
             sb.Append(FieldSeparator).Append(paddleYs[i].ToString("0.###", Inv));
         }

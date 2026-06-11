@@ -29,7 +29,7 @@ public class PongClient : MonoBehaviour
 
     // Typed events. The values arrive parsed so the rest of the client code stays simple.
     public delegate void AssignHandler(int lineIndex, int lineCount);
-    public delegate void StateHandler(Vector2 ballPos, IList<float> paddleYs);
+    public delegate void StateHandler(Vector2 ballPos, Vector2 ballVelocity, IList<float> paddleYs);
     public delegate void ScoreHandler(int lineIndex, int score);
     public delegate void DamageHandler(int lineIndex, int state);
     public delegate void WinHandler(int lineIndex);
@@ -124,6 +124,7 @@ public class PongClient : MonoBehaviour
 
         try {
             _tcp = new TcpClient();
+            _tcp.NoDelay = true;
             _tcp.ReceiveTimeout = 5000;
             _tcp.SendTimeout = 5000;
             var result = _tcp.BeginConnect(DestinationIP, DestinationPort, null, null);
@@ -226,20 +227,23 @@ public class PongClient : MonoBehaviour
                 break;
             }
             case PongProtocol.MsgState: {
-                if (parts.Length >= 3
+                if (parts.Length >= 5
                     && PongProtocol.TryParseFloat(parts[1], out float bx)
-                    && PongProtocol.TryParseFloat(parts[2], out float by)) {
-                    int n = parts.Length - 3;
+                    && PongProtocol.TryParseFloat(parts[2], out float by)
+                    && PongProtocol.TryParseFloat(parts[3], out float bvx)
+                    && PongProtocol.TryParseFloat(parts[4], out float bvy)) {
+                    int n = parts.Length - 5;
                     var ys = new float[n];
-                    for (int i = 0; i < n; i++) PongProtocol.TryParseFloat(parts[3 + i], out ys[i]);
+                    for (int i = 0; i < n; i++) PongProtocol.TryParseFloat(parts[5 + i], out ys[i]);
                     if (DebugNetworkLogs && Time.time >= _nextDebugStateLogTime) {
                         _nextDebugStateLogTime = Time.time + GetDebugInterval();
                         Debug.Log("PongClient DBG STATE ball=("
                             + bx.ToString("0.##") + "," + by.ToString("0.##")
+                            + ") vel=(" + bvx.ToString("0.##") + "," + bvy.ToString("0.##")
                             + ") ownedLine=" + LineIndex + " paddles=["
                             + string.Join(",", System.Array.ConvertAll(ys, v => v.ToString("0.##"))) + "]");
                     }
-                    OnState?.Invoke(new Vector2(bx, by), ys);
+                    OnState?.Invoke(new Vector2(bx, by), new Vector2(bvx, bvy), ys);
                 }
                 break;
             }

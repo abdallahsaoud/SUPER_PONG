@@ -106,6 +106,7 @@ public class PongServer : MonoBehaviour
     {
         while (_tcp.Pending()) {
             TcpClient tcpClient = _tcp.AcceptTcpClient();
+            tcpClient.NoDelay = true;
             var conn = new ClientConnection { Tcp = tcpClient };
             _connections.Add(conn);
 
