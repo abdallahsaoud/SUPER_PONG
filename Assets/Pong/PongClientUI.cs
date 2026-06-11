@@ -157,7 +157,7 @@ public class PongClientUI : MonoBehaviour
         SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 
-    void HandleAssign(int lineIndex, int lineCount)
+    void HandleAssign(int lineIndex, int lineCount, float ringAngleRad)
     {
         _myLine = lineIndex;
         _lineCount = lineCount;

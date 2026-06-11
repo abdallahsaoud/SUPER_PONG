@@ -172,7 +172,7 @@ public class PongClientConnectOverlay : MonoBehaviour
         // just make sure no stale countdown lingers.
     }
 
-    void HandleAssign(int lineIndex, int lineCount)
+    void HandleAssign(int lineIndex, int lineCount, float ringAngleRad)
     {
         // ASSIGN is rebroadcast whenever the roster changes (joins/leaves), including while the
         // end-of-round menu is up. Mid-session ASSIGNs must NOT dismiss that menu — only an

@@ -183,7 +183,8 @@ public class PongServerGame : MonoBehaviour
         rt.Health = CircleArenaConfig.HealthIntact;
         rt.DisplayName = ResolveDisplayName(client, idx);
         rt.ColorSlot = PickUnusedColorSlot(idx);
-        RespreadPlayerAngles();
+        rt.RingAngleRad = ClampPlatformAngleAgainstPlayers(idx, angle, angle);
+        Lines[idx].RingAngleRad = rt.RingAngleRad;
 
         BroadcastRosterAndAssign();
         Debug.Log("PongServerGame: " + rt.DisplayName + " joined line " + idx + " (total " + Lines.Count + ").");
@@ -231,8 +232,8 @@ public class PongServerGame : MonoBehaviour
 
     void ReassignLineIndices()
     {
-        RespreadPlayerAngles();
-        BroadcastRosterAndAssign();
+        // Keep surviving paddles at their current angles. Only the logical line index changes
+        // after a disconnect; re-spreading every paddle makes the whole arena rotate at once.
     }
 
     void HandleMessage(PongServer.ClientConnection client, string message)
@@ -601,18 +602,6 @@ public class PongServerGame : MonoBehaviour
         return desiredAngleRad;
     }
 
-    void RespreadPlayerAngles()
-    {
-        int n = Lines.Count;
-        for (int i = 0; i < n; i++) {
-            float angle = CircleArenaConfig.GetInitialAngleRad(i, n);
-            Lines[i].RingAngleRad = angle;
-            if (_runtime != null && i < _runtime.Length) {
-                _runtime[i].RingAngleRad = angle;
-            }
-        }
-    }
-
     void BroadcastRosterAndAssign()
     {
         int count = Lines.Count;
@@ -628,7 +617,7 @@ public class PongServerGame : MonoBehaviour
             // client target the right runtime slot. Without this, a surviving player whose
             // index shifted would silently control a ghost slot.
             rt.Owner.LineIndex = i;
-            _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count));
+            _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count, rt.RingAngleRad));
         }
     }
 

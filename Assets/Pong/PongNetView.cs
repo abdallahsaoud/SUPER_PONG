@@ -91,13 +91,13 @@ public class PongNetView : MonoBehaviour
         _subscribedClient = null;
     }
 
-    void HandleAssign(int lineIndex, int lineCount)
+    void HandleAssign(int lineIndex, int lineCount, float ringAngleRad)
     {
         EnsurePlatformCount(lineCount);
         ResizeLineBuffers(lineCount);
         _lastSyncedLineIndex = lineIndex;
         if (_localPaddle != null && lineIndex >= 0) {
-            float angle = CircleArenaConfig.GetInitialAngleRad(lineIndex, lineCount);
+            float angle = CircleArenaConfig.NormalizeAngleRad(ringAngleRad);
             if (lineIndex < _targetAngles.Length) {
                 _targetAngles[lineIndex] = angle;
                 _displayAngles[lineIndex] = angle;
@@ -125,7 +125,10 @@ public class PongNetView : MonoBehaviour
         }
         if (Client.LineIndex >= 0) {
             _lastSyncedLineIndex = Client.LineIndex;
-            HandleAssign(Client.LineIndex, Client.LineCount);
+            HandleAssign(
+                Client.LineIndex,
+                Client.LineCount,
+                CircleArenaConfig.GetInitialAngleRad(Client.LineIndex, Client.LineCount));
         }
     }
 
@@ -269,7 +272,10 @@ public class PongNetView : MonoBehaviour
 
         if (Client != null && Client.LineIndex != _lastSyncedLineIndex) {
             if (Client.LineIndex >= 0) {
-                HandleAssign(Client.LineIndex, Client.LineCount);
+                HandleAssign(
+                    Client.LineIndex,
+                    Client.LineCount,
+                    CircleArenaConfig.GetInitialAngleRad(Client.LineIndex, Client.LineCount));
             } else {
                 _lastSyncedLineIndex = -1;
             }
