@@ -34,6 +34,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     int _restartCountdownSeconds;
     bool _postGameSent;
     bool _awaitingNextMatch;
+    bool _freshSessionAssignPending;
 
     PongClient _boundClient;
 
@@ -93,6 +94,7 @@ public class PongClientConnectOverlay : MonoBehaviour
         _restartCountdownSeconds = 0;
         _postGameSent = false;
         _awaitingNextMatch = false;
+        _freshSessionAssignPending = false;
     }
 
     void HandleDamage(int lineIndex, int state)
@@ -172,14 +174,25 @@ public class PongClientConnectOverlay : MonoBehaviour
     void HandleAssign(int lineIndex, int lineCount)
     {
         // ASSIGN is rebroadcast whenever the roster changes (joins/leaves), including while the
-        // end-of-round menu is up. It must NOT dismiss that menu — only an actual match restart
-        // (RESET) or an explicit player action clears it. Otherwise a player joining the lobby
-        // would yank a still-deciding player out of the match-over screen.
+        // end-of-round menu is up. Mid-session ASSIGNs must NOT dismiss that menu — only an
+        // actual match restart (RESET) or an explicit player action clears it. Otherwise a
+        // player joining the lobby would yank a still-deciding player out of the match-over
+        // screen.
+        //
+        // Exception: the *first* ASSIGN of a fresh session (after a reconnect) means the
+        // server is treating us as a brand-new player. Any leftover "You've lost" / match-over
+        // flag from the previous session must be wiped now, otherwise the popup would persist
+        // even though the server has no idea we are the same person.
+        if (_freshSessionAssignPending) {
+            _freshSessionAssignPending = false;
+            ClearMatchUiState();
+        }
     }
 
     void LeaveServer()
     {
         if (Client != null) Client.Close();
+        if (View != null) View.ResetSessionState();
         ClearMatchUiState();
     }
 
@@ -190,6 +203,7 @@ public class PongClientConnectOverlay : MonoBehaviour
 
         if (!Client.IsConnected) {
             ClearMatchUiState();
+            if (View != null) View.ResetSessionState();
             if (!string.IsNullOrEmpty(Client.LastError)) {
                 _status = Client.LastError;
             }
@@ -444,7 +458,14 @@ public class PongClientConnectOverlay : MonoBehaviour
         Client.DestinationIP = ip;
         Client.DestinationPort = port;
         Client.Close();
+        // Wipe view-side state so a stale health flag from a previous session can't make the
+        // freshly-reconnected player immediately appear "eliminated".
+        if (View != null) View.ResetSessionState();
         ClearMatchUiState();
+        // Arm a one-shot clear that triggers on the first ASSIGN of this new session, so any
+        // leftover lost/match-over state from before the disconnect is guaranteed to be wiped
+        // once the server has actually accepted us as a new player.
+        _freshSessionAssignPending = true;
 
         if (Client.Connect()) {
             Client.SendName(_playerName);

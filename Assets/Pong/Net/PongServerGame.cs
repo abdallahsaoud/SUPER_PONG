@@ -622,6 +622,11 @@ public class PongServerGame : MonoBehaviour
         for (int i = 0; i < _runtime.Length; i++) {
             var rt = _runtime[i];
             if (!rt.Assigned || rt.Owner == null) continue;
+            // After a disconnect-driven shift, the runtime entry may have moved to a new index.
+            // Resync the connection's stored LineIndex so PADDLE / READY messages from this
+            // client target the right runtime slot. Without this, a surviving player whose
+            // index shifted would silently control a ghost slot.
+            rt.Owner.LineIndex = i;
             _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count));
         }
     }
