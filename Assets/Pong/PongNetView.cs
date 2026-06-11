@@ -46,6 +46,21 @@ public class PongNetView : MonoBehaviour
         SyncFromClientSession();
     }
 
+    /// <summary>
+    /// Wipe per-session state (paddle angles, ball, health). Call when the client disconnects
+    /// or before reconnecting, otherwise a stale eliminated-flag from a prior game can carry
+    /// over and instantly flag the new session as "lost".
+    /// </summary>
+    public void ResetSessionState()
+    {
+        _targetBall = null;
+        _targetAngles = null;
+        _displayAngles = null;
+        _lineHealth = null;
+        _lastSyncedLineIndex = -2;
+        if (CircleArena != null) CircleArena.SetPlatformCount(0);
+    }
+
     void OnDisable()
     {
         UnbindClientEvents();

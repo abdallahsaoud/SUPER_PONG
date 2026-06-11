@@ -10,8 +10,9 @@ using System.Text;
 /// Client -> Server:
 ///   PADDLE <ringAngleRadians>
 ///   NAME <displayName>                       (tail may contain spaces)
-///   READY                                      (player wants to be in the next match)
-///   POSTGAME                                   (player is on the end-of-round menu)
+///   READY                                      (explicit opt-in to the next match; required from each
+///                                               participant before a finished round can restart)
+///   POSTGAME                                   (player is on the end-of-round menu, not readied)
 ///   SPECTATE                                   (player is watching only, not queued)
 ///
 /// Server -> Client:

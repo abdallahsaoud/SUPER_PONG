@@ -33,6 +33,8 @@ public class PongClientConnectOverlay : MonoBehaviour
     string _winnerName = string.Empty;
     int _restartCountdownSeconds;
     bool _postGameSent;
+    bool _awaitingNextMatch;
+    bool _freshSessionAssignPending;
 
     PongClient _boundClient;
 
@@ -91,11 +93,16 @@ public class PongClientConnectOverlay : MonoBehaviour
         _winnerName = string.Empty;
         _restartCountdownSeconds = 0;
         _postGameSent = false;
+        _awaitingNextMatch = false;
+        _freshSessionAssignPending = false;
     }
 
     void HandleDamage(int lineIndex, int state)
     {
         if (state < HealthEliminated) return;
+        // Once the match is over, the match-over popup takes over: don't re-flag the local
+        // player as "lost" (which would otherwise resurface the You've-lost panel).
+        if (_matchOver) return;
         if (Client != null && lineIndex == Client.LineIndex) {
             _lost = true;
             _spectating = false;
@@ -110,9 +117,12 @@ public class PongClientConnectOverlay : MonoBehaviour
         _winnerLine = lineIndex;
         _winnerName = Client != null ? Client.LastWinnerName : string.Empty;
         _matchOver = true;
-        if (Client != null && Client.LineIndex >= 0 && lineIndex != Client.LineIndex) {
-            _lost = true;
-        }
+        // The match is over: the "You've lost" popup (with its Keep watching button) must
+        // not stay up alongside or behind the match-over popup. Clearing _lost / _spectating
+        // here guarantees only the match-over panel renders, even if anything else
+        // re-evaluated those flags afterwards.
+        _lost = false;
+        _spectating = false;
         NotifyPostGameMenu();
     }
 
@@ -150,26 +160,40 @@ public class PongClientConnectOverlay : MonoBehaviour
     void HandleReset()
     {
         _restartCountdownSeconds = 0;
-        if (_lost || _matchOver) return;
-        ClearMatchUiState();
+        // A RESET means the previous round is fully torn down: either the next match is being
+        // served or the server fell back to waiting. In both cases the end-of-round menu
+        // (lost / match-over / "waiting to restart") must clear so we don't strand the player.
+        if (_awaitingNextMatch || !(_lost || _matchOver)) {
+            ClearMatchUiState();
+            return;
+        }
+        // Local player lost / match still flagged over but hasn't opted in: keep their menu,
+        // just make sure no stale countdown lingers.
     }
 
     void HandleAssign(int lineIndex, int lineCount)
     {
-        // Roster rebroadcast during an active round must not dismiss the lost panel.
-        if (_matchOver) ClearMatchUiState();
+        // ASSIGN is rebroadcast whenever the roster changes (joins/leaves), including while the
+        // end-of-round menu is up. Mid-session ASSIGNs must NOT dismiss that menu — only an
+        // actual match restart (RESET) or an explicit player action clears it. Otherwise a
+        // player joining the lobby would yank a still-deciding player out of the match-over
+        // screen.
+        //
+        // Exception: the *first* ASSIGN of a fresh session (after a reconnect) means the
+        // server is treating us as a brand-new player. Any leftover "You've lost" / match-over
+        // flag from the previous session must be wiped now, otherwise the popup would persist
+        // even though the server has no idea we are the same person.
+        if (_freshSessionAssignPending) {
+            _freshSessionAssignPending = false;
+            ClearMatchUiState();
+        }
     }
 
     void LeaveServer()
     {
         if (Client != null) Client.Close();
+        if (View != null) View.ResetSessionState();
         ClearMatchUiState();
-    }
-
-    void GoToMainMenu()
-    {
-        LeaveServer();
-        PongMainMenuNavigation.RequestMainMenu();
     }
 
     void Update()
@@ -179,6 +203,7 @@ public class PongClientConnectOverlay : MonoBehaviour
 
         if (!Client.IsConnected) {
             ClearMatchUiState();
+            if (View != null) View.ResetSessionState();
             if (!string.IsNullOrEmpty(Client.LastError)) {
                 _status = Client.LastError;
             }
@@ -208,15 +233,11 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     void SyncLostFromView()
     {
+        if (_matchOver) return;
         if (View != null && View.IsLocalPlayerEliminated()) {
             _lost = true;
             if (!_spectating) NotifyPostGameMenu();
         }
-    }
-
-    bool IsLocalWinner()
-    {
-        return Client != null && Client.LineIndex >= 0 && _winnerLine == Client.LineIndex;
     }
 
     void OnGUI()
@@ -229,7 +250,15 @@ public class PongClientConnectOverlay : MonoBehaviour
             return;
         }
 
-        if (_matchOver && IsLocalWinner()) {
+        // Always-on escape so no connected state can ever trap the player: even if every other
+        // panel is suppressed (e.g. a stale countdown hides the awaiting panel), this stays
+        // clickable.
+        DrawLeaveCornerButton();
+
+        // Once the round is over, everyone (winner or loser) gets the match-over menu so they
+        // can opt into the next match. The "you've lost" panel is only for players eliminated
+        // while the round is still being played out by others.
+        if (_matchOver) {
             DrawMatchOverPanel();
             return;
         }
@@ -239,17 +268,22 @@ public class PongClientConnectOverlay : MonoBehaviour
             return;
         }
 
-        if (_matchOver) {
-            DrawMatchOverPanel();
-            return;
-        }
-
         if (IsAwaitingMorePlayers()) {
             DrawAwaitingPlayersPanel();
         }
 
         if (_restartCountdownSeconds > 0) {
             DrawRestartCountdownPanel();
+        }
+    }
+
+    void DrawLeaveCornerButton()
+    {
+        float w = 130f;
+        float h = 30f;
+        var rect = new Rect(Screen.width - w - 12f, 12f, w, h);
+        if (GUI.Button(rect, "Leave server", _buttonStyle)) {
+            LeaveServer();
         }
     }
 
@@ -271,14 +305,24 @@ public class PongClientConnectOverlay : MonoBehaviour
 
     void DrawAwaitingPlayersPanel()
     {
+        // Centered panel with an explicit "Leave server" escape: without it, a player who
+        // stayed after an opponent disconnected would be stranded here with no way to act.
         float w = 360f;
-        float h = 72f;
-        var rect = new Rect((Screen.width - w) * 0.5f, Screen.height * 0.12f, w, h);
+        float h = 168f;
+        var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, string.Empty, _boxStyle);
 
         GUILayout.BeginArea(rect);
         GUILayout.Space(18);
         GUILayout.Label("Awaiting more players to start…", _titleStyle);
+        GUILayout.Space(16);
+        GUILayout.Label(
+            "Waiting for someone else to join before the next match.",
+            _labelStyle);
+        GUILayout.Space(12);
+        if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
+            LeaveServer();
+        }
         GUILayout.EndArea();
     }
 
@@ -313,7 +357,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     void DrawLostPanel()
     {
         float w = 380f;
-        float h = 268f;
+        float h = 220f;
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, string.Empty, _boxStyle);
 
@@ -322,18 +366,12 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Label("You've lost", _titleStyle);
         GUILayout.Space(12);
         GUILayout.Label(
-            "Leave the server, return to the main menu, or keep watching until this match ends.",
+            "Leave the server or keep watching until this match ends.",
             _labelStyle);
         GUILayout.Space(16);
 
         if (GUILayout.Button("Leave server", _buttonStyle, GUILayout.Height(36))) {
             LeaveServer();
-        }
-
-        GUILayout.Space(8);
-
-        if (GUILayout.Button("Main menu", _buttonStyle, GUILayout.Height(36))) {
-            GoToMainMenu();
         }
 
         GUILayout.Space(8);
@@ -349,7 +387,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     void DrawMatchOverPanel()
     {
         float w = 400f;
-        float h = 288f;
+        float h = 240f;
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         GUI.Box(rect, string.Empty, _boxStyle);
 
@@ -358,7 +396,7 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Label(GetMatchOverTitle(), _titleStyle);
         GUILayout.Space(12);
         GUILayout.Label(
-            "Leave the server, return to the main menu, or stay connected for the next match.",
+            "Leave the server or stay connected for the next match.",
             _labelStyle);
         GUILayout.Space(16);
 
@@ -368,18 +406,24 @@ public class PongClientConnectOverlay : MonoBehaviour
 
         GUILayout.Space(8);
 
-        if (GUILayout.Button("Main menu", _buttonStyle, GUILayout.Height(36))) {
-            GoToMainMenu();
-        }
-
-        GUILayout.Space(8);
-
-        if (GUILayout.Button("Stay for next match", _buttonStyle, GUILayout.Height(36))) {
+        if (_awaitingNextMatch) {
+            GUILayout.Label(GetAwaitingNextMatchText(), _labelStyle);
+        } else if (GUILayout.Button("Stay for next match", _buttonStyle, GUILayout.Height(36))) {
             ConfirmReadyForNextMatch();
-            ClearMatchUiState();
+            _awaitingNextMatch = true;
         }
 
         GUILayout.EndArea();
+    }
+
+    string GetAwaitingNextMatchText()
+    {
+        if (_restartCountdownSeconds > 0) {
+            return Client != null && Client.IsJoinLobbyCountdown
+                ? "Ready! Waiting for more players: " + _restartCountdownSeconds + "…"
+                : "Ready! Match starts in " + _restartCountdownSeconds + "…";
+        }
+        return "Ready! Waiting for other players to restart…";
     }
 
     string GetMatchOverTitle()
@@ -414,7 +458,14 @@ public class PongClientConnectOverlay : MonoBehaviour
         Client.DestinationIP = ip;
         Client.DestinationPort = port;
         Client.Close();
+        // Wipe view-side state so a stale health flag from a previous session can't make the
+        // freshly-reconnected player immediately appear "eliminated".
+        if (View != null) View.ResetSessionState();
         ClearMatchUiState();
+        // Arm a one-shot clear that triggers on the first ASSIGN of this new session, so any
+        // leftover lost/match-over state from before the disconnect is guaranteed to be wiped
+        // once the server has actually accepted us as a new player.
+        _freshSessionAssignPending = true;
 
         if (Client.Connect()) {
             Client.SendName(_playerName);

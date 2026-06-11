@@ -215,10 +215,17 @@ public class PongServerGame : MonoBehaviour
 
         client.LineIndex = -1;
 
-        if (GetAssignedCount() < MinPlayersToPlay) {
-            EnterWaitingForPlayers("player disconnected");
-        } else {
+        // Mid-match: if only one alive player remains (or zero), end the round with a WIN
+        // for the survivor so they don't get silently dumped into "waiting for players".
+        // Eliminated paddles already don't count as alive, so this also covers the case
+        // where every other player has already lost when the leaver disconnects.
+        if (_state == BallState.Playing) {
             CheckForLastPlayerStanding();
+        }
+
+        if (GetAssignedCount() < MinPlayersToPlay
+            && _state != BallState.WaitingForPlayers) {
+            EnterWaitingForPlayers("player disconnected");
         }
     }
 
@@ -242,11 +249,13 @@ public class PongServerGame : MonoBehaviour
         }
 
         if (head == PongProtocol.MsgReady) {
+            client.ReadyForNextMatch = true;
             SetClientInGame(client, true);
             return;
         }
 
         if (head == PongProtocol.MsgPostGame || head == PongProtocol.MsgSpectate) {
+            client.ReadyForNextMatch = false;
             SetClientInGame(client, false);
             return;
         }
@@ -302,6 +311,8 @@ public class PongServerGame : MonoBehaviour
         _joinLobbyCountdownRemaining = 0f;
         _preMatchCountdownRemaining = 0f;
         _postRoundLobbyRemaining = 0f;
+        // Readiness is consumed by the match start; the next round will require a fresh opt-in.
+        ClearAllReadyForNextMatch();
         BroadcastCountdown(0);
         for (int i = 0; i < _runtime.Length; i++) {
             _runtime[i].Health = HealthAlive;
@@ -395,11 +406,8 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
-        if (connectedCount == MinPlayersToPlay) {
-            BeginPostRoundLobby();
-            return;
-        }
-
+        // Open the post-round lobby. The next match only starts once enough players have
+        // explicitly readied (see TickPostRoundLobby / TryStartMatchWhenReady).
         BeginPostRoundLobby();
     }
 
@@ -410,13 +418,24 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
-        if (_postRoundLobbyRemaining <= 0f && inGameCount >= MinPlayersToPlay) {
+        // The next match may only begin once the grace period has elapsed AND enough players
+        // have *explicitly* readied. Counting readiness (not the default InGame flag) is what
+        // prevents a single "Stay for next match" click from launching the round on its own.
+        if (_postRoundLobbyRemaining > 0f) {
+            _postRoundLobbyRemaining -= dt;
+            BroadcastCountdown(GetPostRoundCountdownSeconds());
+            return;
+        }
+
+        if (GetReadyForNextMatchCount() >= MinPlayersToPlay) {
             BeginPreMatchCountdown();
             return;
         }
 
-        _postRoundLobbyRemaining -= dt;
-        BroadcastCountdown(GetPostRoundCountdownSeconds());
+        // Grace period is over but we still don't have enough ready players: hold the lobby
+        // open (timer pinned at 0) instead of decrementing into negatives forever.
+        _postRoundLobbyRemaining = 0f;
+        BroadcastCountdown(0);
     }
 
     void SetClientInGame(PongServer.ClientConnection client, bool inGame)
@@ -445,7 +464,12 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
-        if (_state == BallState.Won && _postRoundLobbyRemaining <= 0f) {
+        // After a round, only restart once the grace period elapsed *and* enough players have
+        // explicitly readied. This is the path hit when the last needed player clicks
+        // "Stay for next match"; one ready player must never be enough.
+        if (_state == BallState.Won
+            && _postRoundLobbyRemaining <= 0f
+            && GetReadyForNextMatchCount() >= MinPlayersToPlay) {
             BeginPreMatchCountdown();
         }
     }
@@ -598,6 +622,11 @@ public class PongServerGame : MonoBehaviour
         for (int i = 0; i < _runtime.Length; i++) {
             var rt = _runtime[i];
             if (!rt.Assigned || rt.Owner == null) continue;
+            // After a disconnect-driven shift, the runtime entry may have moved to a new index.
+            // Resync the connection's stored LineIndex so PADDLE / READY messages from this
+            // client target the right runtime slot. Without this, a surviving player whose
+            // index shifted would silently control a ghost slot.
+            rt.Owner.LineIndex = i;
             _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count));
         }
     }
@@ -654,6 +683,9 @@ public class PongServerGame : MonoBehaviour
         if (alive <= 1 && _state == BallState.Playing) {
             _state = BallState.Won;
             _winnerLine = lastAlive;
+            // A new round must be opted into explicitly. Clear every stale readiness flag so
+            // the next match can only start once enough players actively choose to restart.
+            ClearAllReadyForNextMatch();
             if (lastAlive >= 0) {
                 string winnerName = lastAlive < _runtime.Length
                     ? _runtime[lastAlive].DisplayName
@@ -698,6 +730,32 @@ public class PongServerGame : MonoBehaviour
             count++;
         }
         return count;
+    }
+
+    /// <summary>
+    /// Number of assigned players who have *explicitly* readied for the next match
+    /// since the current round ended. Unlike <see cref="GetInGameCount"/>, this never
+    /// counts a connection's default/stale state, so it is the authority for restarting.
+    /// </summary>
+    int GetReadyForNextMatchCount()
+    {
+        if (_runtime == null) return 0;
+        int count = 0;
+        for (int i = 0; i < _runtime.Length; i++) {
+            var rt = _runtime[i];
+            if (!rt.Assigned || rt.Owner == null || !rt.Owner.ReadyForNextMatch) continue;
+            count++;
+        }
+        return count;
+    }
+
+    void ClearAllReadyForNextMatch()
+    {
+        if (_server == null) return;
+        var conns = _server.Connections;
+        for (int i = 0; i < conns.Count; i++) {
+            if (conns[i] != null) conns[i].ReadyForNextMatch = false;
+        }
     }
 
     int GetAliveAssignedCount()

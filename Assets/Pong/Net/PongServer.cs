@@ -26,6 +26,12 @@ public class PongServer : MonoBehaviour
         public string DisplayName = string.Empty;
         /// <summary>False while the client is on the end-of-round menu (until READY).</summary>
         public bool InGame = true;
+        /// <summary>
+        /// True only after the client has *explicitly* opted into the next match via READY
+        /// while the previous round was over. Reset every time a round ends so a stale value
+        /// can never make a single ready player start a match meant for several.
+        /// </summary>
+        public bool ReadyForNextMatch;
     }
 
     TcpListener _tcp;
