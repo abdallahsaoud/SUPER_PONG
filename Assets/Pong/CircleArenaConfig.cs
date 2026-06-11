@@ -19,9 +19,9 @@ public static class CircleArenaConfig
     public const int RingSegments = 96;
     public const float FirstSlotDegrees = 90f;
 
-    public const float DefaultBallSpeed = 4f;
-    public const float MaxBallSpeed = 9f;
-    public const int WallBouncesBeforeSpeedUp = 5;
+    public const float DefaultBallSpeed = 5.5f;
+    public const float MaxBallSpeed = 12f;
+    public const int WallBouncesBeforeSpeedUp = 2;
     public const float BallSpeedAccelAfterMisses = 1.15f;
     public const float WallBounceAngleJitterDegrees = 12f;
     public const int BallPhysicsSubsteps = 6;
