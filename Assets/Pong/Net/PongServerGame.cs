@@ -369,7 +369,10 @@ public class PongServerGame : MonoBehaviour
 
     void StartMatch()
     {
-        if (GetInGameCount() < MinPlayersToPlay) {
+        // Only players who explicitly opted into THIS match (READY — sent on connect and again from
+        // the end-of-round menu) take part. A player idle on the end-of-round modal never readied,
+        // so they must stay a spectator instead of being silently dragged into the next round.
+        if (GetReadyForNextMatchCount() < MinPlayersToPlay) {
             EnterWaitingForPlayers("not enough ready players");
             return;
         }
@@ -377,16 +380,27 @@ public class PongServerGame : MonoBehaviour
         _joinLobbyCountdownRemaining = 0f;
         _preMatchCountdownRemaining = 0f;
         _postRoundLobbyRemaining = 0f;
+
+        // Decide participation BEFORE clearing readiness: readied owners play (Intact), everyone
+        // else spectates this round (Eliminated → ball ignores them, platform hidden client-side).
+        for (int i = 0; i < _runtime.Length; i++) {
+            var rt = _runtime[i];
+            bool participates = rt.Assigned && rt.Owner != null && rt.Owner.ReadyForNextMatch;
+            rt.Health = participates ? CircleArenaConfig.HealthIntact : CircleArenaConfig.HealthEliminated;
+        }
         // Readiness is consumed by the match start; the next round will require a fresh opt-in.
         ClearAllReadyForNextMatch();
         BroadcastCountdown(0);
-        // Re-spread everyone — including spectators who joined mid-round — exactly once, at the
-        // round boundary. This is the only point where angles change for an established player.
-        for (int i = 0; i < _runtime.Length; i++) {
-            _runtime[i].Health = CircleArenaConfig.HealthIntact;
-        }
+        // Re-spread everyone exactly once, at the round boundary. This is the only point where
+        // angles change for an established player.
         RespreadPlayerAngles();
         BroadcastRosterAndAssign();
+        // Tell clients which lines are spectating so their platforms are hidden for the round.
+        for (int i = 0; i < _runtime.Length; i++) {
+            if (_runtime[i].Assigned && _runtime[i].Health >= CircleArenaConfig.HealthEliminated) {
+                _server.Broadcast(PongProtocol.FormatDamage(i, CircleArenaConfig.HealthEliminated));
+            }
+        }
         Debug.Log("PongServerGame: MATCH_STARTED");
         ServeBall();
     }
