@@ -17,6 +17,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     string _portText = PongNetworkUtil.DefaultPort.ToString();
     string _playerName = "Player";
     string _status = "Not connected";
+    int _selectedColorSlot = -1;
     bool _stylesReady;
 
     bool _lost;
@@ -330,7 +331,7 @@ public class PongClientConnectOverlay : MonoBehaviour
         // Centered panel with an explicit "Leave server" escape: without it, a player who
         // stayed after an opponent disconnected would be stranded here with no way to act.
         float w = Scaled(480f);
-        float h = Scaled(270f);
+        float h = Scaled(370f);
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         DrawPixelPanel(rect);
 
@@ -340,7 +341,9 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Label(
             "Waiting for someone else to join before the next match.",
             _labelStyle);
-        GUILayout.Space(Scaled(16));
+        GUILayout.Space(Scaled(18));
+        DrawColorPicker(Client.MyColorSlot, slot => Client.SendColor(slot));
+        GUILayout.Space(Scaled(18));
         if (GUILayout.Button("Leave server", _secondaryButtonStyle, GUILayout.Height(Scaled(50)))) {
             LeaveServer();
         }
@@ -350,7 +353,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     void DrawConnectPanel()
     {
         float w = Scaled(580f);
-        float h = Scaled(450f);
+        float h = Scaled(550f);
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         DrawPixelPanel(rect);
 
@@ -363,6 +366,10 @@ public class PongClientConnectOverlay : MonoBehaviour
         _ip = GUILayout.TextField(_ip, _fieldStyle, GUILayout.Height(Scaled(40)));
         GUILayout.Label("PORT", _fieldLabelStyle);
         _portText = GUILayout.TextField(_portText, _fieldStyle, GUILayout.Height(Scaled(40)));
+        GUILayout.Space(Scaled(14));
+        DrawColorPicker(_selectedColorSlot, slot => {
+            _selectedColorSlot = _selectedColorSlot == slot ? -1 : slot;
+        }, "YOUR COLOR (OPTIONAL)");
         GUILayout.Space(Scaled(14));
 
         if (GUILayout.Button("Connect", _buttonStyle, GUILayout.Height(Scaled(50)))) {
@@ -377,11 +384,9 @@ public class PongClientConnectOverlay : MonoBehaviour
     void DrawLostPanel()
     {
         float w = Scaled(500f);
-        float h = Scaled(340f);
+        float h = Scaled(440f);
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         DrawPixelPanel(rect);
-
-        DrawLocalColorSwatch(rect);
 
         BeginPanelContent(rect, 44f);
         GUILayout.Label("Game Over", _dangerTitleStyle);
@@ -389,7 +394,9 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Label(
             "Leave the server or keep watching until this match ends.",
             _labelStyle);
-        GUILayout.Space(Scaled(22));
+        GUILayout.Space(Scaled(18));
+        DrawColorPicker(Client.MyColorSlot, slot => Client.SendColor(slot));
+        GUILayout.Space(Scaled(18));
 
         if (GUILayout.Button("Keep watching", _buttonStyle, GUILayout.Height(Scaled(50)))) {
             _spectating = true;
@@ -408,11 +415,9 @@ public class PongClientConnectOverlay : MonoBehaviour
     void DrawMatchOverPanel()
     {
         float w = Scaled(520f);
-        float h = Scaled(360f);
+        float h = Scaled(460f);
         var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
         DrawPixelPanel(rect);
-
-        DrawLocalColorSwatch(rect);
 
         BeginPanelContent(rect, 44f);
         GUILayout.Label(GetMatchOverTitle().ToUpperInvariant(), _titleStyle);
@@ -420,7 +425,9 @@ public class PongClientConnectOverlay : MonoBehaviour
         GUILayout.Label(
             "Leave the server or stay connected for the next match.",
             _labelStyle);
-        GUILayout.Space(Scaled(22));
+        GUILayout.Space(Scaled(18));
+        DrawColorPicker(Client.MyColorSlot, slot => Client.SendColor(slot));
+        GUILayout.Space(Scaled(18));
 
         if (GUILayout.Button("Leave server", _secondaryButtonStyle, GUILayout.Height(Scaled(50)))) {
             LeaveServer();
@@ -492,6 +499,7 @@ public class PongClientConnectOverlay : MonoBehaviour
         if (Client.Connect()) {
             Client.SendName(_playerName);
             Client.SendReady();
+            if (_selectedColorSlot >= 0) Client.SendColor(_selectedColorSlot);
             _status = "Connected, syncing…";
             if (View != null) View.ForceBindAndSync();
         } else {
@@ -499,43 +507,45 @@ public class PongClientConnectOverlay : MonoBehaviour
         }
     }
 
-    void DrawLocalColorSwatch(Rect panelRect)
+    /// <summary>
+    /// Row of clickable palette swatches. <paramref name="currentSlot"/> (or -1 for none) gets a
+    /// white frame; clicking a swatch invokes <paramref name="onPick"/> with its palette index.
+    /// </summary>
+    void DrawColorPicker(int currentSlot, System.Action<int> onPick, string label = "YOUR COLOR")
     {
-        if (Client == null) return;
-        int slot = Client.MyColorSlot;
-        if (slot < 0) return;
+        GUILayout.Label(label, _fieldLabelStyle);
+        GUILayout.Space(Scaled(6f));
 
-        if (_swatchTexture == null) {
-            _swatchTexture = new Texture2D(1, 1, TextureFormat.RGBA32, false) {
-                hideFlags = HideFlags.HideAndDontSave,
-                wrapMode = TextureWrapMode.Clamp,
-                filterMode = FilterMode.Point,
-            };
-            _swatchTexture.SetPixel(0, 0, Color.white);
-            _swatchTexture.Apply();
+        float swatchSize = Scaled(34f);
+        float gap = Scaled(8f);
+        float frameInset = Scaled(4f);
+        var palette = CircleArenaConfig.PlayerPalette;
+
+        GUILayout.BeginHorizontal();
+        GUILayout.FlexibleSpace();
+        for (int i = 0; i < palette.Length; i++) {
+            if (i > 0) GUILayout.Space(gap);
+            Rect r = GUILayoutUtility.GetRect(swatchSize, swatchSize);
+
+            if (i == currentSlot) {
+                var frame = new Rect(r.x - frameInset, r.y - frameInset, r.width + frameInset * 2f, r.height + frameInset * 2f);
+                Color prevFrame = GUI.color;
+                GUI.color = Color.white;
+                GUI.DrawTexture(frame, _swatchTexture);
+                GUI.color = prevFrame;
+            }
+
+            Color prev = GUI.color;
+            GUI.color = palette[i];
+            GUI.DrawTexture(r, _swatchTexture);
+            GUI.color = prev;
+
+            if (GUI.Button(r, GUIContent.none, GUIStyle.none)) {
+                onPick?.Invoke(i);
+            }
         }
-
-        Color color = CircleArenaConfig.GetPaletteColor(slot);
-        string label = CircleArenaConfig.GetPaletteColorName(slot);
-
-        float padding = Scaled(14f);
-        float swatchSize = Scaled(24f);
-        var swatchRect = new Rect(panelRect.x + padding, panelRect.y + padding, swatchSize, swatchSize);
-
-        Color prev = GUI.color;
-        GUI.color = color;
-        GUI.DrawTexture(swatchRect, _swatchTexture, ScaleMode.StretchToFill);
-        GUI.color = prev;
-
-        if (!string.IsNullOrEmpty(label)) {
-            float gap = Scaled(8f);
-            var labelRect = new Rect(
-                swatchRect.xMax + gap,
-                swatchRect.y - Scaled(3f),
-                panelRect.width - swatchSize - padding * 2f - gap,
-                swatchSize + Scaled(6f));
-            GUI.Label(labelRect, "You: " + label, _labelStyle);
-        }
+        GUILayout.FlexibleSpace();
+        GUILayout.EndHorizontal();
     }
 
     void OnDestroy()
@@ -632,6 +642,14 @@ public class PongClientConnectOverlay : MonoBehaviour
             hover = { background = _texButtonSecondary, textColor = Color.white },
             active = { background = _texButtonSecondary, textColor = PixelYellow },
         };
+
+        _swatchTexture = new Texture2D(1, 1, TextureFormat.RGBA32, false) {
+            hideFlags = HideFlags.HideAndDontSave,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Point,
+        };
+        _swatchTexture.SetPixel(0, 0, Color.white);
+        _swatchTexture.Apply();
     }
 
     static Texture2D MakeSolidTexture(Color color)

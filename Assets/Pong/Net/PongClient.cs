@@ -131,6 +131,13 @@ public class PongClient : MonoBehaviour
         SendFramed(PongProtocol.FormatPostGame());
     }
 
+    /// <summary>Request a palette color (0..MaxPlayers-1) for this player's paddle.</summary>
+    public void SendColor(int paletteSlot)
+    {
+        if (!IsConnected) return;
+        SendFramed(PongProtocol.FormatColor(paletteSlot));
+    }
+
     public bool Connect()
     {
         if (_tcp != null) {
