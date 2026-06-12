@@ -33,6 +33,15 @@ public class PongUdpSocket
 
     public bool IsOpen => _udp != null;
 
+    /// <summary>Local port this socket is bound to (0 if closed). Useful for diagnostics.</summary>
+    public int LocalPort
+    {
+        get {
+            try { return _udp?.Client?.LocalEndPoint is IPEndPoint ep ? ep.Port : 0; }
+            catch { return 0; }
+        }
+    }
+
     /// <summary>Bind to a local port (server). Pass 0 for an ephemeral port (client).</summary>
     public bool Bind(int port)
     {
