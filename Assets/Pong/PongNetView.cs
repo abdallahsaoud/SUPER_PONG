@@ -144,7 +144,7 @@ public class PongNetView : MonoBehaviour
         EnsurePlatformCount(lineCount);
         ResizeLineBuffers(lineCount);
         _lastSyncedLineIndex = lineIndex;
-        if (_localPaddle != null && lineIndex >= 0) {
+        if (_localPaddle != null && lineIndex >= 0 && !IsLineEliminated(lineIndex)) {
             float angle = CircleArenaConfig.GetInitialAngleRad(lineIndex, lineCount);
             if (lineIndex < _targetAngles.Length) {
                 _targetAngles[lineIndex] = angle;
@@ -153,6 +153,7 @@ public class PongNetView : MonoBehaviour
             _localPaddle.SyncAngleFromServer(angle);
         }
         ApplyAllPlatformPoses();
+        SyncPlatformActiveFromHealth();
         RefreshAllPlatformVisuals();
     }
 
@@ -162,6 +163,7 @@ public class PongNetView : MonoBehaviour
         ResizeLineBuffers(lineCount);
         SyncLocalPlatformAfterRoster(lineCount);
         ApplyAllPlatformPoses();
+        SyncPlatformActiveFromHealth();
         RefreshAllPlatformVisuals();
     }
 
@@ -205,7 +207,8 @@ public class PongNetView : MonoBehaviour
     {
         if (CircleArena == null) return;
         if (lineIndex < 0) return;
-        if (_lineHealth == null || lineIndex >= _lineHealth.Length) return;
+
+        EnsureLineHealthCapacity(lineIndex + 1);
 
         _lineHealth[lineIndex] = state;
         bool eliminated = state >= CircleArenaConfig.HealthEliminated;
@@ -239,6 +242,7 @@ public class PongNetView : MonoBehaviour
             }
             int n = Mathf.Min(angles.Length, _targetAngles.Length);
             for (int i = 0; i < n; i++) _targetAngles[i] = angles[i];
+            SyncPlatformActiveFromHealth();
         }
 
         EnqueueSnapshot(snap);
@@ -296,6 +300,32 @@ public class PongNetView : MonoBehaviour
         _displayAngles = newDisplay;
         _lineHealth = newHealth;
         ClearSnapshots();
+        SyncPlatformActiveFromHealth();
+    }
+
+    void EnsureLineHealthCapacity(int minCount)
+    {
+        if (minCount <= 0) return;
+        int rosterCount = Client != null ? Mathf.Max(Client.LineCount, Client.LastRosterCount) : 0;
+        int count = Mathf.Max(minCount, rosterCount, CircleArena != null ? CircleArena.Paddles.Length : 0);
+        if (_lineHealth != null && _lineHealth.Length >= count) return;
+        EnsurePlatformCount(count);
+        ResizeLineBuffers(count);
+    }
+
+    /// <summary>
+    /// SetPlatformCount recreates every arc as active; re-apply elimination from _lineHealth
+    /// so spectators / mid-match reconnects never flash a ghost paddle.
+    /// </summary>
+    void SyncPlatformActiveFromHealth()
+    {
+        if (CircleArena == null || _lineHealth == null) return;
+        var paddles = CircleArena.Paddles;
+        int n = Mathf.Min(paddles.Length, _lineHealth.Length);
+        for (int i = 0; i < n; i++) {
+            bool eliminated = _lineHealth[i] >= CircleArenaConfig.HealthEliminated;
+            CircleArena.SetPlatformActive(i, !eliminated);
+        }
     }
 
     void ApplyAllPlatformPoses()

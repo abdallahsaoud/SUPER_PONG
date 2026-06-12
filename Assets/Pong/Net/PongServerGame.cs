@@ -210,8 +210,8 @@ public class PongServerGame : MonoBehaviour
             // which is the only place that re-spreads angles. NOT re-spreading here is what keeps
             // existing paddles from teleporting / overlapping mid-match.
             rt.Health = CircleArenaConfig.HealthEliminated;
+            SetClientInGame(client, false);
             BroadcastRosterAndAssign();
-            _server.Broadcast(PongProtocol.FormatDamage(idx, CircleArenaConfig.HealthEliminated));
             Debug.Log("PongServerGame: " + rt.DisplayName + " joined mid-match as spectator on line "
                 + idx + " (total " + Lines.Count + ").");
             if (EnableDiagnostics) {
@@ -300,6 +300,10 @@ public class PongServerGame : MonoBehaviour
 
         if (head == PongProtocol.MsgReady) {
             client.ReadyForNextMatch = true;
+            if (IsMidMatchSpectator(client)) {
+                SetClientInGame(client, false);
+                return;
+            }
             SetClientInGame(client, true);
             return;
         }
@@ -772,6 +776,22 @@ public class PongServerGame : MonoBehaviour
             rt.Owner.LineIndex = i;
             _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count));
         }
+
+        // Re-broadcast elimination whenever the roster changes. Clients may receive DAMAGE
+        // before their line buffers are sized (ROSTER/ASSIGN still in flight), which would
+        // otherwise leave a visible ghost paddle for mid-match reconnects.
+        for (int i = 0; i < _runtime.Length; i++) {
+            var rt = _runtime[i];
+            if (!rt.Assigned || rt.Health < CircleArenaConfig.HealthEliminated) continue;
+            _server.Broadcast(PongProtocol.FormatDamage(i, rt.Health));
+        }
+    }
+
+    bool IsMidMatchSpectator(PongServer.ClientConnection client)
+    {
+        if (!MatchInProgress || client == null) return false;
+        if (client.LineIndex < 0 || _runtime == null || client.LineIndex >= _runtime.Length) return false;
+        return _runtime[client.LineIndex].Health >= CircleArenaConfig.HealthEliminated;
     }
 
     void BroadcastNames()

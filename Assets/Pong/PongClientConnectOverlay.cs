@@ -29,6 +29,8 @@ public class PongClientConnectOverlay : MonoBehaviour
     bool _postGameSent;
     bool _awaitingNextMatch;
     bool _freshSessionAssignPending;
+    bool _midMatchQueue;
+    bool _waitingForNextRound;
 
     PongClient _boundClient;
 
@@ -112,6 +114,8 @@ public class PongClientConnectOverlay : MonoBehaviour
         _postGameSent = false;
         _awaitingNextMatch = false;
         _freshSessionAssignPending = false;
+        _midMatchQueue = false;
+        _waitingForNextRound = false;
     }
 
     void HandleDamage(int lineIndex, int state)
@@ -121,6 +125,12 @@ public class PongClientConnectOverlay : MonoBehaviour
         // player as "lost" (which would otherwise resurface the You've-lost panel).
         if (_matchOver) return;
         if (Client != null && lineIndex == Client.LineIndex) {
+            if (_midMatchQueue) {
+                _spectating = true;
+                _waitingForNextRound = true;
+                Client.SendPostGame();
+                return;
+            }
             _lost = true;
             _spectating = false;
             NotifyPostGameMenu();
@@ -185,7 +195,7 @@ public class PongClientConnectOverlay : MonoBehaviour
         // A RESET means the previous round is fully torn down: either the next match is being
         // served or the server fell back to waiting. In both cases the end-of-round menu
         // (lost / match-over / "waiting to restart") must clear so we don't strand the player.
-        if (_awaitingNextMatch || !(_lost || _matchOver)) {
+        if (_awaitingNextMatch || _waitingForNextRound || !(_lost || _matchOver)) {
             ClearMatchUiState();
             return;
         }
@@ -255,6 +265,7 @@ public class PongClientConnectOverlay : MonoBehaviour
     {
         if (Client == null || !Client.IsConnected) return false;
         if (_matchOver) return false;
+        if (_waitingForNextRound) return false;
         if (_lost && !_spectating) return false;
         int count = Client.LineCount > 0 ? Client.LineCount : Client.LastRosterCount;
         return count > 0 && count < MinPlayersToStart;
@@ -264,6 +275,12 @@ public class PongClientConnectOverlay : MonoBehaviour
     {
         if (_matchOver) return;
         if (View != null && View.IsLocalPlayerEliminated()) {
+            if (_midMatchQueue) {
+                _spectating = true;
+                _waitingForNextRound = true;
+                if (Client != null) Client.SendPostGame();
+                return;
+            }
             _lost = true;
             if (!_spectating) NotifyPostGameMenu();
         }
@@ -293,6 +310,11 @@ public class PongClientConnectOverlay : MonoBehaviour
         // while the round is still being played out by others.
         if (_matchOver) {
             DrawMatchOverPanel();
+            return;
+        }
+
+        if (_waitingForNextRound) {
+            DrawWaitingForNextRoundPanel();
             return;
         }
 
@@ -388,6 +410,29 @@ public class PongClientConnectOverlay : MonoBehaviour
 
         GUILayout.Space(Scaled(8));
         GUILayout.Label(_status, _labelStyle);
+        EndPanelContent();
+    }
+
+    void DrawWaitingForNextRoundPanel()
+    {
+        float w = Scaled(500f);
+        float h = Scaled(400f);
+        var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+        DrawPixelPanel(rect);
+
+        BeginPanelContent(rect, 44f);
+        GUILayout.Label("Match in progress", _titleStyle);
+        GUILayout.Space(Scaled(16));
+        GUILayout.Label(
+            "You are queued for the next round. Watch the current match or leave the server.",
+            _labelStyle);
+        GUILayout.Space(Scaled(18));
+        DrawColorPicker(Client.MyColorSlot, slot => Client.SendColor(slot));
+        GUILayout.Space(Scaled(18));
+
+        if (GUILayout.Button("Leave server", _secondaryButtonStyle, GUILayout.Height(Scaled(50)))) {
+            LeaveServer();
+        }
         EndPanelContent();
     }
 
@@ -527,6 +572,7 @@ public class PongClientConnectOverlay : MonoBehaviour
         }
 
         _freshSessionAssignPending = true;
+        _midMatchQueue = !afterRoundEnd;
 
         if (Client.Connect()) {
             Client.SendName(_playerName);
