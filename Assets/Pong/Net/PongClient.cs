@@ -1,15 +1,25 @@
 using UnityEngine;
+using System.Net;
 using System.Net.Sockets;
 using System.Collections.Generic;
 
+/// <summary>One authoritative world snapshot decoded from a STATE datagram.</summary>
+public struct PongStateSnapshot
+{
+    public uint Seq;
+    public long ServerTimeMs;
+    public Vector2 BallPos;
+    public Vector2 BallVel;
+    public float[] Angles;
+}
+
 /// <summary>
-/// TCP client for Multiplayer Pong. One persistent connection to the server.
+/// Hybrid TCP + UDP client for Multiplayer Pong.
+///   - TCP (reliable): handshake, ASSIGN / ROSTER / NAMES / COLORS / SCORE / DAMAGE / WIN /
+///     RESET / COUNTDOWN, plus the UDPTOKEN handed out by the server.
+///   - UDP (real-time): outgoing PADDLE (~30/s) and incoming STATE.
 ///
-/// Outgoing: PADDLE <y> (sent by PongNetPaddle ~30/s).
-/// Incoming: ASSIGN / STATE / SCORE / DAMAGE / WIN / RESET (parsed and exposed
-/// as typed events for PongNetView / PongNetPaddle / UI to consume).
-///
-/// Adapted from Assets/Demos/TCP/TCPClient.cs with newline message framing.
+/// Adapted from Assets/Demos/TCP/TCPClient.cs (newline framing) and the UDP demo helpers.
 /// </summary>
 public class PongClient : MonoBehaviour
 {
@@ -20,16 +30,26 @@ public class PongClient : MonoBehaviour
     [Tooltip("Max debug log frequency in logs/second.")]
     public float DebugLogRate = 1f;
 
+    [Tooltip("How often to (re)send HELLO until the first STATE arrives, in seconds.")]
+    public float HelloInterval = 0.25f;
+
     TcpClient _tcp;
     readonly PongMessageBuffer _buffer = new PongMessageBuffer();
     readonly byte[] _readBuffer = new byte[4096];
     float _nextDebugStateLogTime;
 
+    readonly PongUdpSocket _udp = new PongUdpSocket();
+    string _udpToken = string.Empty;
+    IPEndPoint _serverUdpEndpoint;
+    uint _lastStateSeq;
+    bool _gotFirstState;
+    float _helloAccumulator;
+
     public bool IsConnected => _tcp != null && _tcp.Connected;
 
     // Typed events. The values arrive parsed so the rest of the client code stays simple.
     public delegate void AssignHandler(int lineIndex, int lineCount);
-    public delegate void StateHandler(Vector2 ballPos, IList<float> paddleYs);
+    public delegate void StateHandler(in PongStateSnapshot snapshot);
     public delegate void ScoreHandler(int lineIndex, int score);
     public delegate void DamageHandler(int lineIndex, int state);
     public delegate void WinHandler(int lineIndex);
@@ -139,6 +159,8 @@ public class PongClient : MonoBehaviour
             _tcp = new TcpClient();
             _tcp.ReceiveTimeout = 5000;
             _tcp.SendTimeout = 5000;
+            // Disable Nagle: control messages are tiny and latency-sensitive.
+            try { _tcp.NoDelay = true; } catch { /* ignore on restricted platforms */ }
             var result = _tcp.BeginConnect(DestinationIP, DestinationPort, null, null);
             bool completed = result.AsyncWaitHandle.WaitOne(System.TimeSpan.FromSeconds(5));
             if (!completed || !_tcp.Connected) {
@@ -147,6 +169,7 @@ public class PongClient : MonoBehaviour
                     + ". Check IP, port, firewall, and that the host server is running.");
             }
             _tcp.EndConnect(result);
+            OpenUdpChannel();
             LastError = string.Empty;
             Debug.Log("PongClient connected to " + DestinationIP + ":" + DestinationPort);
             return true;
@@ -160,11 +183,29 @@ public class PongClient : MonoBehaviour
 
     public void Close() => CloseInternal();
 
-    /// <summary>Send a paddle position to the server. Cheap; safe to call ~30/s.</summary>
+    void OpenUdpChannel()
+    {
+        _udpToken = string.Empty;
+        _lastStateSeq = 0;
+        _gotFirstState = false;
+        _helloAccumulator = 0f;
+        _serverUdpEndpoint = null;
+
+        if (!IPAddress.TryParse(DestinationIP, out var serverAddr)) {
+            Debug.LogWarning("PongClient: cannot parse server IP for UDP: " + DestinationIP);
+            return;
+        }
+        _serverUdpEndpoint = new IPEndPoint(serverAddr, DestinationPort);
+        if (!_udp.Bind(0)) {
+            Debug.LogWarning("PongClient: UDP channel failed to open — real-time updates unavailable.");
+        }
+    }
+
+    /// <summary>Send a paddle position to the server over UDP. Cheap; safe to call ~30/s.</summary>
     public void SendPaddle(float y)
     {
-        if (!IsConnected) return;
-        SendFramed(PongProtocol.FormatPaddle(y));
+        if (!_udp.IsOpen || _serverUdpEndpoint == null || string.IsNullOrEmpty(_udpToken)) return;
+        _udp.Send(PongProtocol.FormatPaddle(_udpToken, y), _serverUdpEndpoint);
     }
 
     void SendFramed(string framedMessage)
@@ -197,6 +238,74 @@ public class PongClient : MonoBehaviour
             Debug.LogWarning("PongClient read error: " + ex.Message);
             CloseInternal();
         }
+
+        PumpUdp();
+    }
+
+    void PumpUdp()
+    {
+        if (!_udp.IsOpen) return;
+
+        // Keep announcing our endpoint until the first STATE confirms the server can reach us.
+        // After that, PADDLE datagrams keep the mapping fresh on their own.
+        if (!_gotFirstState
+            && !string.IsNullOrEmpty(_udpToken)
+            && _serverUdpEndpoint != null) {
+            _helloAccumulator += Time.unscaledDeltaTime;
+            if (_helloAccumulator >= HelloInterval) {
+                _helloAccumulator = 0f;
+                _udp.Send(PongProtocol.FormatHello(_udpToken), _serverUdpEndpoint);
+            }
+        }
+
+        var datagrams = _udp.Poll();
+        for (int i = 0; i < datagrams.Count; i++) {
+            DispatchUdp(datagrams[i].Message);
+        }
+    }
+
+    void DispatchUdp(string message)
+    {
+        if (string.IsNullOrEmpty(message)) return;
+        if (!PongProtocol.TryGetMessageHead(message, out string head)) return;
+        if (head != PongProtocol.MsgState) return;
+
+        string[] parts = message.Split(PongProtocol.FieldSeparator);
+        // STATE <seq> <serverTimeMs> <ballX> <ballY> <ballVX> <ballVY> <angle0> ...
+        if (parts.Length < 7) return;
+        if (!PongProtocol.TryParseUInt(parts[1], out uint seq)) return;
+        if (!PongProtocol.TryParseLong(parts[2], out long serverTimeMs)) return;
+        if (!PongProtocol.TryParseFloat(parts[3], out float bx)) return;
+        if (!PongProtocol.TryParseFloat(parts[4], out float by)) return;
+        if (!PongProtocol.TryParseFloat(parts[5], out float bvx)) return;
+        if (!PongProtocol.TryParseFloat(parts[6], out float bvy)) return;
+
+        // Drop stale / out-of-order datagrams: UDP can reorder and we only ever want to move forward.
+        if (_gotFirstState && seq <= _lastStateSeq) return;
+        _lastStateSeq = seq;
+        _gotFirstState = true;
+
+        int n = parts.Length - 7;
+        var ys = new float[n];
+        for (int i = 0; i < n; i++) PongProtocol.TryParseFloat(parts[7 + i], out ys[i]);
+
+        if (DebugNetworkLogs && Time.time >= _nextDebugStateLogTime) {
+            _nextDebugStateLogTime = Time.time + GetDebugInterval();
+            Debug.Log("PongClient DBG STATE seq=" + seq + " ball=("
+                + bx.ToString("0.##") + "," + by.ToString("0.##")
+                + ") vel=(" + bvx.ToString("0.##") + "," + bvy.ToString("0.##")
+                + ") ownedLine=" + LineIndex + " paddles=["
+                + string.Join(",", System.Array.ConvertAll(ys, v => v.ToString("0.##"))) + "]");
+        }
+
+        var snapshot = new PongStateSnapshot {
+            Seq = seq,
+            ServerTimeMs = serverTimeMs,
+            BallPos = new Vector2(bx, by),
+            BallVel = new Vector2(bvx, bvy),
+            Angles = ys,
+        };
+        OnState?.Invoke(in snapshot);
     }
 
     void OnDisable() => CloseInternal();
@@ -216,6 +325,16 @@ public class PongClient : MonoBehaviour
         string[] parts = message.Split(PongProtocol.FieldSeparator);
 
         switch (head) {
+            case PongProtocol.MsgUdpToken: {
+                if (parts.Length >= 2 && !string.IsNullOrEmpty(parts[1])) {
+                    _udpToken = parts[1];
+                    // Announce our endpoint immediately; PumpUdp keeps retrying until STATE arrives.
+                    if (_udp.IsOpen && _serverUdpEndpoint != null) {
+                        _udp.Send(PongProtocol.FormatHello(_udpToken), _serverUdpEndpoint);
+                    }
+                }
+                break;
+            }
             case PongProtocol.MsgRoster: {
                 if (parts.Length >= 2 && PongProtocol.TryParseInt(parts[1], out int count)) {
                     LineCount = count;
@@ -235,24 +354,6 @@ public class PongClient : MonoBehaviour
                         Debug.Log("PongClient DBG ASSIGN line=" + idx + " lineCount=" + count);
                     }
                     OnAssign?.Invoke(idx, count);
-                }
-                break;
-            }
-            case PongProtocol.MsgState: {
-                if (parts.Length >= 3
-                    && PongProtocol.TryParseFloat(parts[1], out float bx)
-                    && PongProtocol.TryParseFloat(parts[2], out float by)) {
-                    int n = parts.Length - 3;
-                    var ys = new float[n];
-                    for (int i = 0; i < n; i++) PongProtocol.TryParseFloat(parts[3 + i], out ys[i]);
-                    if (DebugNetworkLogs && Time.time >= _nextDebugStateLogTime) {
-                        _nextDebugStateLogTime = Time.time + GetDebugInterval();
-                        Debug.Log("PongClient DBG STATE ball=("
-                            + bx.ToString("0.##") + "," + by.ToString("0.##")
-                            + ") ownedLine=" + LineIndex + " paddles=["
-                            + string.Join(",", System.Array.ConvertAll(ys, v => v.ToString("0.##"))) + "]");
-                    }
-                    OnState?.Invoke(new Vector2(bx, by), ys);
                 }
                 break;
             }
@@ -329,6 +430,12 @@ public class PongClient : MonoBehaviour
             try { _tcp.Close(); } catch { /* ignore */ }
             _tcp = null;
         }
+        _udp.Close();
+        _udpToken = string.Empty;
+        _serverUdpEndpoint = null;
+        _lastStateSeq = 0;
+        _gotFirstState = false;
+        _helloAccumulator = 0f;
         LineIndex = -1;
         LineCount = 0;
         LastRosterCount = 0;

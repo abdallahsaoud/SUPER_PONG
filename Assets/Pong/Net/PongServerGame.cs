@@ -62,10 +62,13 @@ public class PongServerGame : MonoBehaviour
     int _lastBroadcastCountdown = -1;
     float _nextDebugPaddleLogTime;
     float _nextDebugStateLogTime;
+    uint _stateSeq;
+    readonly System.Diagnostics.Stopwatch _clock = new System.Diagnostics.Stopwatch();
 
     void Awake()
     {
         _server = GetComponent<PongServer>();
+        _clock.Start();
     }
 
     public void RebuildRuntime()
@@ -110,6 +113,7 @@ public class PongServerGame : MonoBehaviour
         _server.OnClientConnected += HandleClientConnected;
         _server.OnClientDisconnected += HandleClientDisconnected;
         _server.OnMessageReceived += HandleMessage;
+        _server.OnUdpPaddle += HandleUdpPaddle;
     }
 
     void OnDisable()
@@ -118,6 +122,7 @@ public class PongServerGame : MonoBehaviour
             _server.OnClientConnected -= HandleClientConnected;
             _server.OnClientDisconnected -= HandleClientDisconnected;
             _server.OnMessageReceived -= HandleMessage;
+            _server.OnUdpPaddle -= HandleUdpPaddle;
         }
     }
 
@@ -259,26 +264,29 @@ public class PongServerGame : MonoBehaviour
             SetClientInGame(client, false);
             return;
         }
+    }
 
-        if (head == PongProtocol.MsgPaddle) {
-            if (!client.InGame) return;
-            if (PongProtocol.TryParseFloat(tail, out float angleRad)) {
-                if (client.LineIndex >= 0 && client.LineIndex < _runtime.Length) {
-                    var rt = _runtime[client.LineIndex];
-                    if (rt.Health >= CircleArenaConfig.HealthEliminated) return;
-                    float clamped = ClampPlatformAngleAgainstPlayers(
-                        client.LineIndex,
-                        rt.RingAngleRad,
-                        angleRad);
-                    rt.RingAngleRad = clamped;
-                    Lines[client.LineIndex].RingAngleRad = clamped;
-                    if (DebugNetworkLogs && Time.time >= _nextDebugPaddleLogTime) {
-                        _nextDebugPaddleLogTime = Time.time + GetDebugInterval();
-                        Debug.Log("PongServerGame DBG PADDLE line=" + client.LineIndex
-                            + " angle=" + clamped.ToString("0.###"));
-                    }
-                }
-            }
+    /// <summary>
+    /// Paddle update from the real-time UDP channel. The client is already resolved from its
+    /// token by PongServer; we only validate game state and clamp against neighbours (anti-cheat).
+    /// </summary>
+    void HandleUdpPaddle(PongServer.ClientConnection client, float angleRad)
+    {
+        if (client == null || !client.InGame) return;
+        EnsureRuntime();
+        if (client.LineIndex < 0 || _runtime == null || client.LineIndex >= _runtime.Length) return;
+
+        var rt = _runtime[client.LineIndex];
+        if (rt.Health >= CircleArenaConfig.HealthEliminated) return;
+
+        float clamped = ClampPlatformAngleAgainstPlayers(client.LineIndex, rt.RingAngleRad, angleRad);
+        rt.RingAngleRad = clamped;
+        Lines[client.LineIndex].RingAngleRad = clamped;
+
+        if (DebugNetworkLogs && Time.time >= _nextDebugPaddleLogTime) {
+            _nextDebugPaddleLogTime = Time.time + GetDebugInterval();
+            Debug.Log("PongServerGame DBG PADDLE(udp) line=" + client.LineIndex
+                + " angle=" + clamped.ToString("0.###"));
         }
     }
 
@@ -743,7 +751,14 @@ public class PongServerGame : MonoBehaviour
         for (int i = 0; i < _runtime.Length; i++) {
             angles[i] = _runtime[i].RingAngleRad;
         }
-        _server.Broadcast(PongProtocol.FormatState(_ballPos.x, _ballPos.y, angles));
+        // Ball velocity lets the client extrapolate through dropped/late datagrams; it is zero
+        // whenever the ball is not in play (_ballDir == 0).
+        Vector2 vel = _ballDir * BallSpeed;
+        long serverTimeMs = _clock.ElapsedMilliseconds;
+        _server.BroadcastStateUdp(PongProtocol.FormatState(
+            _stateSeq++, serverTimeMs,
+            _ballPos.x, _ballPos.y, vel.x, vel.y,
+            angles));
     }
 
     float GetDebugInterval()

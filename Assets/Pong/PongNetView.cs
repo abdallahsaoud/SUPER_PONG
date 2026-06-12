@@ -7,7 +7,14 @@ public class PongNetView : MonoBehaviour
     public Transform Ball;
     public PongCircleArena CircleArena;
 
-    public float InterpolationRate = 18f;
+    [Header("Interpolation")]
+    [Tooltip("Render this far behind the latest server time, in ms. Higher = smoother but more lag. "
+        + "~100ms hides typical LAN jitter and one or two lost datagrams.")]
+    public float InterpolationDelayMs = 100f;
+    [Tooltip("Max time the ball may be extrapolated past the last snapshot during a packet gap, in ms.")]
+    public float MaxExtrapolationMs = 250f;
+    [Tooltip("How long old snapshots are kept in the interpolation buffer, in ms.")]
+    public float MaxBufferMs = 1000f;
 
     public bool IsLineEliminated(int lineIndex)
     {
@@ -22,7 +29,20 @@ public class PongNetView : MonoBehaviour
         return Client != null && Client.LineIndex >= 0 && IsLineEliminated(Client.LineIndex);
     }
 
-    Vector3? _targetBall;
+    struct Snapshot
+    {
+        public double TimeMs;
+        public Vector2 BallPos;
+        public Vector2 BallVel;
+        public float[] Angles;
+    }
+
+    readonly List<Snapshot> _snaps = new List<Snapshot>(32);
+    double _renderTimeMs;
+    bool _renderInit;
+    float[] _sampleAngles;
+    bool _hasBall;
+
     float[] _targetAngles;
     float[] _displayAngles;
     int[] _lineHealth;
@@ -50,13 +70,20 @@ public class PongNetView : MonoBehaviour
     /// </summary>
     public void ResetSessionState()
     {
-        _targetBall = null;
+        ClearSnapshots();
         _targetAngles = null;
         _displayAngles = null;
         _lineHealth = null;
         _lineColorSlots = null;
         _lastSyncedLineIndex = -2;
         if (CircleArena != null) CircleArena.SetPlatformCount(0);
+    }
+
+    void ClearSnapshots()
+    {
+        _snaps.Clear();
+        _renderInit = false;
+        _hasBall = false;
     }
 
     void OnDisable()
@@ -142,7 +169,7 @@ public class PongNetView : MonoBehaviour
 
     void HandleReset()
     {
-        _targetBall = null;
+        ClearSnapshots();
         if (_lineHealth == null || CircleArena == null) return;
 
         for (int i = 0; i < _lineHealth.Length; i++) {
@@ -177,22 +204,42 @@ public class PongNetView : MonoBehaviour
         RefreshAllPlatformVisuals();
     }
 
-    void HandleState(Vector2 ballPos, IList<float> paddleAngles)
+    void HandleState(in PongStateSnapshot snap)
     {
-        _targetBall = new Vector3(ballPos.x, ballPos.y, Ball != null ? Ball.position.z : 0f);
-
-        if (paddleAngles == null) return;
-
-        if (CircleArena != null && CircleArena.Paddles.Length != paddleAngles.Count) {
-            EnsurePlatformCount(paddleAngles.Count);
+        float[] angles = snap.Angles;
+        if (angles != null) {
+            if (CircleArena != null && CircleArena.Paddles.Length != angles.Length) {
+                EnsurePlatformCount(angles.Length);
+            }
+            if (_targetAngles == null || _targetAngles.Length != angles.Length) {
+                // Roster size changed: old snapshots have a different angle count, so drop them.
+                ResizeLineBuffers(angles.Length);
+            }
+            int n = Mathf.Min(angles.Length, _targetAngles.Length);
+            for (int i = 0; i < n; i++) _targetAngles[i] = angles[i];
         }
 
-        if (_targetAngles == null || _targetAngles.Length != paddleAngles.Count) {
-            ResizeLineBuffers(paddleAngles.Count);
-        }
+        EnqueueSnapshot(snap);
+    }
 
-        int n = Mathf.Min(paddleAngles.Count, _targetAngles.Length);
-        for (int i = 0; i < n; i++) _targetAngles[i] = paddleAngles[i];
+    void EnqueueSnapshot(in PongStateSnapshot snap)
+    {
+        // The client already dropped stale/out-of-order datagrams, so snapshots arrive in
+        // increasing server time — a plain append keeps the buffer ordered.
+        _snaps.Add(new Snapshot {
+            TimeMs = snap.ServerTimeMs,
+            BallPos = snap.BallPos,
+            BallVel = snap.BallVel,
+            Angles = snap.Angles,
+        });
+        _hasBall = true;
+
+        double cutoff = snap.ServerTimeMs - MaxBufferMs;
+        int removeCount = 0;
+        while (removeCount < _snaps.Count - 2 && _snaps[removeCount].TimeMs < cutoff) {
+            removeCount++;
+        }
+        if (removeCount > 0) _snaps.RemoveRange(0, removeCount);
     }
 
     void EnsurePlatformCount(int count)
@@ -226,6 +273,7 @@ public class PongNetView : MonoBehaviour
         _targetAngles = newTarget;
         _displayAngles = newDisplay;
         _lineHealth = newHealth;
+        ClearSnapshots();
     }
 
     void ApplyAllPlatformPoses()
@@ -277,10 +325,11 @@ public class PongNetView : MonoBehaviour
 
         if (CircleArena == null) return;
 
-        float t = 1f - Mathf.Exp(-InterpolationRate * Time.deltaTime);
+        AdvanceRenderClock(Time.deltaTime);
+        bool sampled = SampleWorld(out Vector2 ballPos);
 
-        if (Ball != null && _targetBall.HasValue) {
-            Ball.position = Vector3.Lerp(Ball.position, _targetBall.Value, t);
+        if (Ball != null && _hasBall && sampled) {
+            Ball.position = new Vector3(ballPos.x, ballPos.y, Ball.position.z);
         }
 
         if (_targetAngles == null || _displayAngles == null) return;
@@ -301,13 +350,116 @@ public class PongNetView : MonoBehaviour
                 continue;
             }
 
-            _displayAngles[i] = Mathf.LerpAngle(
-                _displayAngles[i] * Mathf.Rad2Deg,
-                _targetAngles[i] * Mathf.Rad2Deg,
-                t) * Mathf.Deg2Rad;
-
+            // Remote paddle: position comes straight from the interpolated snapshot sample.
+            if (_sampleAngles != null && i < _sampleAngles.Length) {
+                _displayAngles[i] = _sampleAngles[i];
+            }
             CircleArena.UpdatePlatformAngle(i, _displayAngles[i]);
             ApplyLineVisual(i);
+        }
+    }
+
+    void AdvanceRenderClock(float dt)
+    {
+        if (_snaps.Count == 0) return;
+        double latest = _snaps[_snaps.Count - 1].TimeMs;
+
+        if (!_renderInit) {
+            _renderTimeMs = latest - InterpolationDelayMs;
+            _renderInit = true;
+            return;
+        }
+
+        _renderTimeMs += dt * 1000.0;
+
+        // If we fell well behind (editor hitch, GC, etc.), jump back to the target lag so latency
+        // doesn't accumulate over time.
+        double target = latest - InterpolationDelayMs;
+        if (_renderTimeMs < target - InterpolationDelayMs) {
+            _renderTimeMs = target;
+        }
+
+        // During a packet gap the clock would run away; cap it so the ball only extrapolates a
+        // bounded amount past the last snapshot.
+        double maxAhead = latest + MaxExtrapolationMs;
+        if (_renderTimeMs > maxAhead) _renderTimeMs = maxAhead;
+    }
+
+    /// <summary>
+    /// Sample ball position and remote paddle angles (into <see cref="_sampleAngles"/>) at the
+    /// current render time: linear interpolation between the two bracketing snapshots, or bounded
+    /// ball extrapolation when the render time is past the most recent snapshot.
+    /// </summary>
+    bool SampleWorld(out Vector2 ballPos)
+    {
+        ballPos = default;
+        int count = _snaps.Count;
+        if (count == 0) return false;
+
+        double rt = _renderTimeMs;
+        var first = _snaps[0];
+        var last = _snaps[count - 1];
+
+        if (rt <= first.TimeMs) {
+            ballPos = first.BallPos;
+            CopySampleAngles(first.Angles);
+            return true;
+        }
+
+        if (rt >= last.TimeMs) {
+            ballPos = ExtrapolateBall(last, rt);
+            CopySampleAngles(last.Angles);
+            return true;
+        }
+
+        for (int i = count - 1; i >= 1; i--) {
+            var a = _snaps[i - 1];
+            var b = _snaps[i];
+            if (rt >= a.TimeMs && rt <= b.TimeMs) {
+                double span = b.TimeMs - a.TimeMs;
+                float t = span > 1e-3 ? (float)((rt - a.TimeMs) / span) : 0f;
+                ballPos = Vector2.Lerp(a.BallPos, b.BallPos, t);
+                LerpSampleAngles(a.Angles, b.Angles, t);
+                return true;
+            }
+        }
+
+        ballPos = last.BallPos;
+        CopySampleAngles(last.Angles);
+        return true;
+    }
+
+    Vector2 ExtrapolateBall(in Snapshot s, double renderMs)
+    {
+        double dt = (renderMs - s.TimeMs) / 1000.0;
+        if (dt < 0.0) dt = 0.0;
+        double cap = MaxExtrapolationMs / 1000.0;
+        if (dt > cap) dt = cap;
+        return s.BallPos + s.BallVel * (float)dt;
+    }
+
+    void EnsureSampleAngles(int len)
+    {
+        if (_sampleAngles == null || _sampleAngles.Length != len) _sampleAngles = new float[len];
+    }
+
+    void CopySampleAngles(float[] src)
+    {
+        if (src == null) { _sampleAngles = null; return; }
+        EnsureSampleAngles(src.Length);
+        System.Array.Copy(src, _sampleAngles, src.Length);
+    }
+
+    void LerpSampleAngles(float[] a, float[] b, float t)
+    {
+        if (a == null || b == null) { CopySampleAngles(a ?? b); return; }
+        int len = Mathf.Min(a.Length, b.Length);
+        EnsureSampleAngles(len);
+        for (int i = 0; i < len; i++) {
+            _sampleAngles[i] = Mathf.LerpAngle(
+                a[i] * Mathf.Rad2Deg,
+                b[i] * Mathf.Rad2Deg,
+                t) * Mathf.Deg2Rad;
         }
     }
 

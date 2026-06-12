@@ -7,26 +7,39 @@ using System.Text;
 /// Each message is a single line ending with '\n'. Fields are space-separated.
 /// Floats use invariant culture so '.' is the decimal separator on every locale.
 ///
-/// Client -> Server:
-///   PADDLE <ringAngleRadians>
+/// Transport split (hybrid TCP + UDP):
+///   - Reliable/ordered control messages travel over TCP (everything below except STATE/PADDLE/HELLO).
+///   - The high-frequency real-time channel (STATE server->client, PADDLE client->server) travels
+///     over UDP on the same port. HELLO registers a client's UDP endpoint with the server.
+///
+/// Client -> Server (TCP):
 ///   NAME <displayName>                       (tail may contain spaces)
 ///   READY                                      (explicit opt-in to the next match; required from each
 ///                                               participant before a finished round can restart)
 ///   POSTGAME                                   (player is on the end-of-round menu, not readied)
 ///   SPECTATE                                   (player is watching only, not queued)
 ///
-/// Server -> Client:
+/// Client -> Server (UDP):
+///   HELLO  <token>                           (registers/refreshes this client's UDP endpoint)
+///   PADDLE <token> <ringAngleRadians>        (token identifies the owning client; spoof-resistant)
+///
+/// Server -> Client (TCP):
+///   UDPTOKEN <token>                         (per-connection secret used to address the UDP channel)
 ///   ASSIGN <lineIndex> <lineCount>
 ///   NAMES <name0><tab><name1>...               (tab-separated, one per line slot)
 ///   COLORS <slot0> <slot1> ... <slotN-1>       (palette index per line; -1 = unassigned)
 ///   ROSTER <lineCount>
-///   STATE  <ballX> <ballY> <angle0> <angle1> ... <angleN-1>
 ///   SCORE  <lineIndex> <score>
 ///   DAMAGE <lineIndex> <state>            (state: 0=Intact, 2=Eliminated)
 ///   WIN    <lineIndex> <winnerName>
 ///   RESET
 ///   COUNTDOWN <secondsRemaining>           (0 = hide restart timer)
 ///   JOINCOUNTDOWN <secondsRemaining>       (lobby waits for more players)
+///
+/// Server -> Client (UDP):
+///   STATE <seq> <serverTimeMs> <ballX> <ballY> <ballVX> <ballVY> <angle0> ... <angleN-1>
+///         (seq: monotonically increasing, client drops stale/out-of-order; serverTimeMs + ball
+///          velocity drive snapshot interpolation and ball extrapolation on the client)
 /// </summary>
 public static class PongProtocol
 {
@@ -34,6 +47,8 @@ public static class PongProtocol
     public const char FieldSeparator = ' ';
 
     public const string MsgPaddle    = "PADDLE";
+    public const string MsgHello     = "HELLO";
+    public const string MsgUdpToken  = "UDPTOKEN";
     public const string MsgName      = "NAME";
     public const string MsgReady     = "READY";
     public const string MsgPostGame  = "POSTGAME";
@@ -116,18 +131,34 @@ public static class PongProtocol
         return names;
     }
 
-    public static string FormatPaddle(float y)
-        => MsgPaddle + FieldSeparator + y.ToString("0.###", Inv) + MessageDelimiter;
+    /// <summary>UDP paddle update. The token identifies the owning client to the server.</summary>
+    public static string FormatPaddle(string token, float y)
+        => MsgPaddle + FieldSeparator + token + FieldSeparator + y.ToString("0.###", Inv) + MessageDelimiter;
+
+    /// <summary>UDP registration: tells the server which endpoint owns this token.</summary>
+    public static string FormatHello(string token)
+        => MsgHello + FieldSeparator + token + MessageDelimiter;
+
+    /// <summary>TCP message handing the per-connection UDP token to the client.</summary>
+    public static string FormatUdpToken(string token)
+        => MsgUdpToken + FieldSeparator + token + MessageDelimiter;
 
     public static string FormatAssign(int lineIndex, int lineCount)
         => MsgAssign + FieldSeparator + lineIndex.ToString(Inv) + FieldSeparator + lineCount.ToString(Inv) + MessageDelimiter;
 
-    public static string FormatState(float ballX, float ballY, IList<float> paddleYs)
+    public static string FormatState(
+        uint seq, long serverTimeMs,
+        float ballX, float ballY, float ballVX, float ballVY,
+        IList<float> paddleYs)
     {
-        var sb = new StringBuilder(64);
+        var sb = new StringBuilder(96);
         sb.Append(MsgState);
+        sb.Append(FieldSeparator).Append(seq.ToString(Inv));
+        sb.Append(FieldSeparator).Append(serverTimeMs.ToString(Inv));
         sb.Append(FieldSeparator).Append(ballX.ToString("0.###", Inv));
         sb.Append(FieldSeparator).Append(ballY.ToString("0.###", Inv));
+        sb.Append(FieldSeparator).Append(ballVX.ToString("0.###", Inv));
+        sb.Append(FieldSeparator).Append(ballVY.ToString("0.###", Inv));
         for (int i = 0; i < paddleYs.Count; i++) {
             sb.Append(FieldSeparator).Append(paddleYs[i].ToString("0.###", Inv));
         }
@@ -230,6 +261,24 @@ public static class PongProtocol
 
     public static bool TryParseInt(string s, out int value)
         => int.TryParse(s, NumberStyles.Integer, Inv, out value);
+
+    public static bool TryParseUInt(string s, out uint value)
+        => uint.TryParse(s, NumberStyles.Integer, Inv, out value);
+
+    public static bool TryParseLong(string s, out long value)
+        => long.TryParse(s, NumberStyles.Integer, Inv, out value);
+
+    /// <summary>Random, hard-to-guess per-connection UDP token (decimal ulong, no separators).</summary>
+    public static string NewUdpToken()
+    {
+        var bytes = new byte[8];
+        using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create()) {
+            rng.GetBytes(bytes);
+        }
+        ulong value = System.BitConverter.ToUInt64(bytes, 0);
+        if (value == 0) value = 1;
+        return value.ToString(Inv);
+    }
 }
 
 /// <summary>

@@ -15,3 +15,35 @@ build*.app/
 *.0.2.zip
 *.zip
 /UserSettings/
+
+# Unity generated / transient
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+# Burst AOT debug output — Unity literally names it "DoNotShip"
+*_BurstDebugInformation_DoNotShip/
+/[Aa]ssets/[Aa]ssetStoreTools*
+sysinfo.txt
+crashlytics-build.properties
+*.unitypackage
+*.unitypackage.meta
+*.apk
+*.aab
+*.tmp
+
+# IDE / editor
+/.idea/
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.suo
+
+# OS junk
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini

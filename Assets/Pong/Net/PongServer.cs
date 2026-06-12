@@ -24,6 +24,10 @@ public class PongServer : MonoBehaviour
         /// <summary>Line index assigned to this client by PongServerGame, or -1 if none.</summary>
         public int LineIndex = -1;
         public string DisplayName = string.Empty;
+        /// <summary>Per-connection secret used to address/identify this client on the UDP channel.</summary>
+        public string UdpToken = string.Empty;
+        /// <summary>Source endpoint of the client's UDP channel, learned from HELLO/PADDLE. Null until then.</summary>
+        public IPEndPoint UdpEndpoint;
         /// <summary>False while the client is on the end-of-round menu (until READY).</summary>
         public bool InGame = true;
         /// <summary>
@@ -38,13 +42,19 @@ public class PongServer : MonoBehaviour
     readonly List<ClientConnection> _connections = new List<ClientConnection>();
     readonly byte[] _readBuffer = new byte[4096];
 
+    readonly PongUdpSocket _udp = new PongUdpSocket();
+    readonly Dictionary<string, ClientConnection> _byToken = new Dictionary<string, ClientConnection>();
+
     public delegate void ClientConnectedHandler(ClientConnection client);
     public delegate void ClientDisconnectedHandler(ClientConnection client);
     public delegate void MessageHandler(ClientConnection client, string message);
+    /// <summary>Real-time paddle update received over UDP, already mapped to its owning client.</summary>
+    public delegate void UdpPaddleHandler(ClientConnection client, float angleRad);
 
     public ClientConnectedHandler OnClientConnected;
     public ClientDisconnectedHandler OnClientDisconnected;
     public MessageHandler OnMessageReceived;
+    public UdpPaddleHandler OnUdpPaddle;
 
     public bool IsListening => _tcp != null;
     public int ConnectionCount => _connections.Count;
@@ -60,7 +70,11 @@ public class PongServer : MonoBehaviour
         try {
             _tcp = new TcpListener(IPAddress.Any, ListenPort);
             _tcp.Start();
-            Debug.Log("PongServer listening on port " + ListenPort);
+            if (!_udp.Bind(ListenPort)) {
+                Debug.LogWarning("PongServer: UDP channel failed to bind on port " + ListenPort
+                    + " — real-time updates will not be delivered.");
+            }
+            Debug.Log("PongServer listening on port " + ListenPort + " (TCP control + UDP real-time)");
             return true;
         } catch (System.Exception ex) {
             Debug.LogWarning("PongServer listen error: " + ex.Message);
@@ -104,6 +118,53 @@ public class PongServer : MonoBehaviour
         if (_tcp == null) return;
         AcceptNewConnections();
         PollConnections();
+        PollUdp();
+    }
+
+    /// <summary>Send a real-time STATE datagram to every client whose UDP endpoint is known.</summary>
+    public void BroadcastStateUdp(string framedMessage)
+    {
+        if (!_udp.IsOpen) return;
+        for (int i = 0; i < _connections.Count; i++) {
+            var c = _connections[i];
+            if (c.UdpEndpoint == null) continue;
+            _udp.Send(framedMessage, c.UdpEndpoint);
+        }
+    }
+
+    void PollUdp()
+    {
+        if (!_udp.IsOpen) return;
+        var datagrams = _udp.Poll();
+        for (int i = 0; i < datagrams.Count; i++) {
+            HandleUdpDatagram(datagrams[i]);
+        }
+    }
+
+    void HandleUdpDatagram(PongUdpSocket.Datagram datagram)
+    {
+        string message = datagram.Message;
+        if (!PongProtocol.TryGetMessageHead(message, out string head)) return;
+
+        string[] parts = message.Split(PongProtocol.FieldSeparator);
+
+        // HELLO <token>: register/refresh this client's UDP endpoint.
+        if (head == PongProtocol.MsgHello) {
+            if (parts.Length >= 2 && _byToken.TryGetValue(parts[1], out var helloClient)) {
+                helloClient.UdpEndpoint = datagram.Source;
+            }
+            return;
+        }
+
+        // PADDLE <token> <angle>: identify the owner by token, refresh endpoint, forward angle.
+        if (head == PongProtocol.MsgPaddle) {
+            if (parts.Length >= 3
+                && _byToken.TryGetValue(parts[1], out var paddleClient)
+                && PongProtocol.TryParseFloat(parts[2], out float angle)) {
+                paddleClient.UdpEndpoint = datagram.Source;
+                OnUdpPaddle?.Invoke(paddleClient, angle);
+            }
+        }
     }
 
     void OnDisable() => CloseInternal();
@@ -112,12 +173,20 @@ public class PongServer : MonoBehaviour
     {
         while (_tcp.Pending()) {
             TcpClient tcpClient = _tcp.AcceptTcpClient();
+            // Disable Nagle: control messages are tiny and latency-sensitive, we never
+            // want them buffered waiting for more bytes.
+            try { tcpClient.NoDelay = true; } catch { /* ignore on restricted platforms */ }
             var conn = new ClientConnection { Tcp = tcpClient };
+            conn.UdpToken = PongProtocol.NewUdpToken();
             _connections.Add(conn);
+            _byToken[conn.UdpToken] = conn;
 
             var remote = (IPEndPoint)tcpClient.Client.RemoteEndPoint;
             Debug.Log("PongServer: new connection from " + remote.Address);
 
+            // Hand the UDP token over the reliable channel before any game state, so the client
+            // can start registering its UDP endpoint as soon as it is assigned.
+            Send(conn, PongProtocol.FormatUdpToken(conn.UdpToken));
             OnClientConnected?.Invoke(conn);
         }
     }
@@ -157,6 +226,7 @@ public class PongServer : MonoBehaviour
         Debug.Log("PongServer: client disconnected (line " + conn.LineIndex + ")");
         try { conn.Tcp?.Close(); } catch { /* ignore */ }
         _connections.RemoveAt(index);
+        if (!string.IsNullOrEmpty(conn.UdpToken)) _byToken.Remove(conn.UdpToken);
         OnClientDisconnected?.Invoke(conn);
     }
 
@@ -166,9 +236,11 @@ public class PongServer : MonoBehaviour
             try { _tcp.Stop(); } catch { /* ignore */ }
             _tcp = null;
         }
+        _udp.Close();
         for (int i = 0; i < _connections.Count; i++) {
             try { _connections[i].Tcp?.Close(); } catch { /* ignore */ }
         }
         _connections.Clear();
+        _byToken.Clear();
     }
 }
