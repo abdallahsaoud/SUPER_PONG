@@ -169,8 +169,16 @@ public static class PongProtocol
     public static string FormatUdpToken(string token)
         => MsgUdpToken + FieldSeparator + token + MessageDelimiter;
 
-    public static string FormatAssign(int lineIndex, int lineCount)
-        => MsgAssign + FieldSeparator + lineIndex.ToString(Inv) + FieldSeparator + lineCount.ToString(Inv) + MessageDelimiter;
+    public static string FormatAssign(int lineIndex, int lineCount, bool queuedForNextMatch = false)
+    {
+        var sb = new StringBuilder(32);
+        sb.Append(MsgAssign);
+        sb.Append(FieldSeparator).Append(lineIndex.ToString(Inv));
+        sb.Append(FieldSeparator).Append(lineCount.ToString(Inv));
+        if (queuedForNextMatch) sb.Append(FieldSeparator).Append('1');
+        sb.Append(MessageDelimiter);
+        return sb.ToString();
+    }
 
     /// <summary>
     /// Build a STATE datagram for UDP broadcast. Called ~30/s by PongServerGame.BroadcastState.

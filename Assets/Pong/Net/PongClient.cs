@@ -127,10 +127,21 @@ public class PongClient : MonoBehaviour
     /// <summary>True when the server counts this client toward the next match.</summary>
     public bool ParticipatesInGame { get; private set; } = true;
 
+    /// <summary>
+    /// True when the latest ASSIGN marked this connection as a mid-match spectator
+    /// (queued for the next round, paddle hidden until RESET).
+    /// </summary>
+    public bool QueuedForNextMatch { get; private set; }
+
+    public void MarkSpectating()
+    {
+        ParticipatesInGame = false;
+    }
+
     public void SendReady()
     {
         if (!IsConnected) return;
-        ParticipatesInGame = true;
+        if (!QueuedForNextMatch) ParticipatesInGame = true;
         SendFramed(PongProtocol.FormatReady());
     }
 
@@ -391,11 +402,21 @@ public class PongClient : MonoBehaviour
                     LineIndex = idx;
                     LineCount = count;
                     LastRosterCount = count;
+                    QueuedForNextMatch = parts.Length >= 4 && parts[3] == "1";
+                    if (QueuedForNextMatch) MarkSpectating();
                     if (DebugNetworkLogs) {
-                        Debug.Log("PongClient DBG ASSIGN line=" + idx + " lineCount=" + count);
+                        Debug.Log("PongClient DBG ASSIGN line=" + idx + " lineCount=" + count
+                            + " queued=" + (QueuedForNextMatch ? "1" : "0"));
                     }
                     OnAssign?.Invoke(idx, count);
                 }
+                break;
+            }
+            case PongProtocol.MsgReset: {
+                RestartCountdownSeconds = 0;
+                IsJoinLobbyCountdown = false;
+                QueuedForNextMatch = false;
+                OnReset?.Invoke();
                 break;
             }
             case PongProtocol.MsgScore: {
@@ -421,12 +442,6 @@ public class PongClient : MonoBehaviour
                         : winnerName;
                     OnWin?.Invoke(idx);
                 }
-                break;
-            }
-            case PongProtocol.MsgReset: {
-                RestartCountdownSeconds = 0;
-                IsJoinLobbyCountdown = false;
-                OnReset?.Invoke();
                 break;
             }
             case PongProtocol.MsgCountdown: {
@@ -477,6 +492,7 @@ public class PongClient : MonoBehaviour
         RestartCountdownSeconds = 0;
         IsJoinLobbyCountdown = false;
         ParticipatesInGame = true;
+        QueuedForNextMatch = false;
         _playerNames = new string[0];
         _colorSlots = new int[0];
     }

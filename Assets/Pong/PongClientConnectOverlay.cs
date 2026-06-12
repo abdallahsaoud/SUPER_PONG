@@ -29,7 +29,6 @@ public class PongClientConnectOverlay : MonoBehaviour
     bool _postGameSent;
     bool _awaitingNextMatch;
     bool _freshSessionAssignPending;
-    bool _midMatchQueue;
     bool _waitingForNextRound;
 
     PongClient _boundClient;
@@ -114,7 +113,6 @@ public class PongClientConnectOverlay : MonoBehaviour
         _postGameSent = false;
         _awaitingNextMatch = false;
         _freshSessionAssignPending = false;
-        _midMatchQueue = false;
         _waitingForNextRound = false;
     }
 
@@ -125,10 +123,11 @@ public class PongClientConnectOverlay : MonoBehaviour
         // player as "lost" (which would otherwise resurface the You've-lost panel).
         if (_matchOver) return;
         if (Client != null && lineIndex == Client.LineIndex) {
-            if (_midMatchQueue) {
+            if (Client.QueuedForNextMatch || _waitingForNextRound) {
                 _spectating = true;
                 _waitingForNextRound = true;
-                Client.SendPostGame();
+                _lost = false;
+                if (!Client.QueuedForNextMatch) Client.MarkSpectating();
                 return;
             }
             _lost = true;
@@ -217,7 +216,19 @@ public class PongClientConnectOverlay : MonoBehaviour
         // even though the server has no idea we are the same person.
         if (_freshSessionAssignPending) {
             _freshSessionAssignPending = false;
+            bool queued = Client != null && Client.QueuedForNextMatch;
             ClearMatchUiState();
+            if (queued) {
+                _waitingForNextRound = true;
+                _spectating = true;
+            }
+            return;
+        }
+
+        if (Client != null && Client.QueuedForNextMatch) {
+            _waitingForNextRound = true;
+            _spectating = true;
+            _lost = false;
         }
     }
 
@@ -274,13 +285,8 @@ public class PongClientConnectOverlay : MonoBehaviour
     void SyncLostFromView()
     {
         if (_matchOver) return;
+        if (_waitingForNextRound || (Client != null && Client.QueuedForNextMatch)) return;
         if (View != null && View.IsLocalPlayerEliminated()) {
-            if (_midMatchQueue) {
-                _spectating = true;
-                _waitingForNextRound = true;
-                if (Client != null) Client.SendPostGame();
-                return;
-            }
             _lost = true;
             if (!_spectating) NotifyPostGameMenu();
         }
@@ -572,7 +578,6 @@ public class PongClientConnectOverlay : MonoBehaviour
         }
 
         _freshSessionAssignPending = true;
-        _midMatchQueue = !afterRoundEnd;
 
         if (Client.Connect()) {
             Client.SendName(_playerName);

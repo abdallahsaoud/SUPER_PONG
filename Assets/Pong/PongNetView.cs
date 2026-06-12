@@ -143,6 +143,9 @@ public class PongNetView : MonoBehaviour
     {
         EnsurePlatformCount(lineCount);
         ResizeLineBuffers(lineCount);
+        if (Client != null && Client.QueuedForNextMatch && lineIndex >= 0 && lineIndex < _lineHealth.Length) {
+            _lineHealth[lineIndex] = CircleArenaConfig.HealthEliminated;
+        }
         _lastSyncedLineIndex = lineIndex;
         if (_localPaddle != null && lineIndex >= 0 && !IsLineEliminated(lineIndex)) {
             float angle = CircleArenaConfig.GetInitialAngleRad(lineIndex, lineCount);
@@ -214,6 +217,7 @@ public class PongNetView : MonoBehaviour
         bool eliminated = state >= CircleArenaConfig.HealthEliminated;
         CircleArena.SetPlatformActive(lineIndex, !eliminated);
         if (!eliminated) ApplyLineVisual(lineIndex);
+        else if (Client != null && lineIndex == Client.LineIndex) Client.MarkSpectating();
     }
 
     void HandleColors(IList<int> colorSlots)

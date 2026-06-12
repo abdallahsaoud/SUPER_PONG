@@ -774,12 +774,17 @@ public class PongServerGame : MonoBehaviour
             // client target the right runtime slot. Without this, a surviving player whose
             // index shifted would silently control a ghost slot.
             rt.Owner.LineIndex = i;
-            _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count));
+            _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count, IsMidMatchSpectator(rt.Owner)));
         }
 
-        // Re-broadcast elimination whenever the roster changes. Clients may receive DAMAGE
-        // before their line buffers are sized (ROSTER/ASSIGN still in flight), which would
-        // otherwise leave a visible ghost paddle for mid-match reconnects.
+        // Re-broadcast elimination whenever the roster changes. SetPlatformCount on clients
+        // recreates all paddles as active, so DAMAGE must land after ROSTER/ASSIGN sizing.
+        BroadcastLineHealth();
+    }
+
+    void BroadcastLineHealth()
+    {
+        if (_runtime == null) return;
         for (int i = 0; i < _runtime.Length; i++) {
             var rt = _runtime[i];
             if (!rt.Assigned || rt.Health < CircleArenaConfig.HealthEliminated) continue;
