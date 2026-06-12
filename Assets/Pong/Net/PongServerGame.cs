@@ -72,7 +72,9 @@ public class PongServerGame : MonoBehaviour
     int _lastBroadcastCountdown = -1;
     float _nextDebugPaddleLogTime;
     float _nextDebugStateLogTime;
+    /// <summary>Monotonic STATE sequence number (embedded in every UDP STATE datagram).</summary>
     uint _stateSeq;
+    /// <summary>Server-side clock (ms) stamped into STATE for client interpolation.</summary>
     readonly System.Diagnostics.Stopwatch _clock = new System.Diagnostics.Stopwatch();
     float _diagAccum;
     float _diagMaxFrameDt;
@@ -327,8 +329,12 @@ public class PongServerGame : MonoBehaviour
     }
 
     /// <summary>
-    /// Paddle update from the real-time UDP channel. The client is already resolved from its
-    /// token by PongServer; we only validate game state and clamp against neighbours (anti-cheat).
+    /// Authoritative paddle update from the UDP channel.
+    ///
+    /// PongServer already resolved the client from the datagram token and refreshed
+    /// UdpEndpoint. We validate game state (InGame, not eliminated), clamp angle
+    /// against neighbours (anti-overlap / light anti-cheat), then store on LineRuntime.
+    /// The angle is included in the next BroadcastState() snapshot to all clients.
     /// </summary>
     void HandleUdpPaddle(PongServer.ClientConnection client, float angleRad)
     {
@@ -933,6 +939,18 @@ public class PongServerGame : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Build and broadcast one STATE datagram over UDP (~30/s while in game).
+    ///
+    /// Includes:
+    ///   seq           — monotonic; clients drop stale datagrams
+    ///   serverTimeMs  — drives client interpolation clock (PongNetView)
+    ///   ball position + velocity — velocity enables dead reckoning on packet loss
+    ///   all paddle angles — authoritative for remote paddles; local paddle uses input
+    ///
+    /// TCP is intentionally NOT used here: a single lost TCP segment would stall all
+    /// subsequent states (head-of-line blocking), causing visible teleporting.
+    /// </summary>
     void BroadcastState()
     {
         if (_runtime == null || _runtime.Length == 0) return;

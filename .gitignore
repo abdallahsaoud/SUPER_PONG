@@ -42,6 +42,9 @@ crashlytics-build.properties
 /Assets/_Recovery/
 /Assets/_Recovery.meta
 
+# Empty / local-only folders
+/scripts/
+
 # OS junk
 .DS_Store
 .DS_Store?

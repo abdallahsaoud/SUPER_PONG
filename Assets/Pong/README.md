@@ -32,22 +32,40 @@ high-level netcode is used, in line with the course constraint
 
 ## Files
 
-- `Net/PongProtocol.cs` — message types and framing.
-- `Net/PongServer.cs` — TCP listener, per-client message buffer, broadcast.
-- `Net/PongServerGame.cs` — authoritative game loop (ball, scoring, line
-  assignment, per-line health hook for Milestone 2).
-- `Net/PongClient.cs` — TCP connection, typed message events.
+```
+Assets/Pong/
+├── Net/                         ← Network layer (TCP + UDP)
+│   ├── PongProtocol.cs          — wire format, Format*/TryParse*, UDP token
+│   ├── PongUdpSocket.cs         — low-level UDP bind/send/poll
+│   ├── PongServer.cs            — TCP listener + UDP channel + token routing
+│   ├── PongClient.cs            — hybrid client (TCP control + UDP real-time)
+│   ├── PongServerGame.cs        — authoritative simulation + BroadcastState
+│   ├── PongNetworkUtil.cs       — IP helpers
+│   ├── PongDiagnostics.cs       — optional server log file
+│   └── README_UDP.md            — presentation guide (French) for the UDP stack
+├── CircleArenaConfig.cs         — arena geometry + ball physics
+├── PongNetView.cs               — snapshot interpolation (consumes UDP STATE)
+├── PongNetPaddle.cs             — local input → UDP PADDLE
+├── PongClientConnectOverlay.cs  — pixel UI (connect / lobby / game-over)
+├── PongBootstrap.cs             — procedural scene setup
+├── PongServer.unity / PongClient.unity
+└── README.md                      — this file
+
+Assets/Resources/Fonts/          — VT323 pixel font (menus)
+Assets/Demos/                      — course reference demos (TCP/UDP/local Pong); not the live net game
+```
+
+- `Net/PongProtocol.cs` — message types and framing (see `Net/README_UDP.md` for UDP walkthrough).
+- `Net/PongUdpSocket.cs` — non-blocking UDP transport helper.
+- `Net/PongServer.cs` — TCP listener, UDP channel, per-client token map, broadcast.
+- `Net/PongServerGame.cs` — authoritative game loop (ball, scoring, line assignment).
+- `Net/PongClient.cs` — hybrid connection, STATE seq filter, typed events.
 - `CircleArenaConfig.cs` / `PongCircleArena.cs` — circular ring + platform slots.
-- `PongBootstrap.cs` — procedurally builds the scene (camera, ball, circle arena)
-  and wires the right components based on a `Mode = Server | Client` role.
-- `PongNetPaddle.cs` — locally-controlled line (InputSystem → local movement →
-  send PADDLE to server).
-- `PongNetView.cs` — renders ball + remote paddles from `STATE` with smoothing.
+- `PongBootstrap.cs` — procedurally builds the scene and wires Server | Client role.
+- `PongNetPaddle.cs` — locally-controlled paddle (InputSystem → UDP PADDLE).
+- `PongNetView.cs` — renders ball + remote paddles from STATE with interpolation.
 - `PongServerUI.cs` — optional server-side listen/host UI.
-- `PongClientConnectOverlay.cs` — IMGUI connect screen + end-of-round menu
-  (lost / match-over / awaiting / countdown panels).
-- `PongServer.unity` / `PongClient.unity` — minimal scenes that just place a
-  `PongBootstrap`.
+- `PongClientConnectOverlay.cs` — IMGUI connect screen + end-of-round menus.
 
 ## First-time setup (one click)
 
@@ -97,7 +115,7 @@ The course allows a headless (no-GUI) server.
 ```
 client -> server (TCP):
   NAME <displayName>
-  READY | POSTGAME | SPECTATE
+  READY | POSTGAME | COLOR <slot>
 
 client -> server (UDP):
   HELLO  <token>
@@ -119,6 +137,9 @@ server -> client (TCP):
 server -> client (UDP):
   STATE  <seq> <serverTimeMs> <ballX> <ballY> <ballVX> <ballVY> <offset0> ... <offsetN-1>
 ```
+
+For a step-by-step presentation guide (connection lifecycle, file map, diagrams),
+see **`Net/README_UDP.md`**.
 
 All messages end with `\n`. TCP is a byte stream, so the receive side accumulates
 bytes in `PongMessageBuffer` and yields complete `\n`-terminated lines. UDP is

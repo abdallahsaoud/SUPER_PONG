@@ -4,13 +4,21 @@ using System.Net.Sockets;
 using System.Collections.Generic;
 
 /// <summary>
-/// TCP server for Multiplayer Pong. One persistent connection per client.
-/// Handles accept/disconnect, message framing, and broadcast/send primitives.
-/// Game rules (ball, scoring, line assignment) live in PongServerGame, which
-/// uses the OnClientConnected / OnLineMessage callbacks below.
+/// TCP + UDP server for Multiplayer Pong. One persistent TCP connection per client.
 ///
-/// Adapted from Assets/Demos/TCP/TCPServer.cs but with newline-framed messages
-/// and per-connection state so we know which paddle each client owns.
+/// ── RESPONSIBILITIES ─────────────────────────────────────────────────────────
+///   TCP  — accept/disconnect, newline-framed control messages, broadcast/send
+///   UDP  — real-time channel on the SAME port: receive HELLO/PADDLE, send STATE
+///
+/// Game rules (ball, scoring, roster) live in PongServerGame, which subscribes to
+/// OnClientConnected / OnClientDisconnected / OnMessageReceived / OnUdpPaddle.
+///
+/// ── UDP IDENTITY MAP ─────────────────────────────────────────────────────────
+/// Each TCP connection gets a random UdpToken (via TCP UDPTOKEN message).
+/// _byToken maps token → ClientConnection so HELLO/PADDLE datagrams can be
+/// attributed without trusting source IP alone (also refreshes UdpEndpoint on NAT).
+///
+/// Adapted from Assets/Demos/TCP/TCPServer.cs with hybrid transport.
 /// </summary>
 public class PongServer : MonoBehaviour
 {
@@ -43,6 +51,7 @@ public class PongServer : MonoBehaviour
     readonly byte[] _readBuffer = new byte[4096];
 
     readonly PongUdpSocket _udp = new PongUdpSocket();
+    /// <summary>Maps UdpToken → ClientConnection for HELLO/PADDLE datagram routing.</summary>
     readonly Dictionary<string, ClientConnection> _byToken = new Dictionary<string, ClientConnection>();
 
     public delegate void ClientConnectedHandler(ClientConnection client);
@@ -60,6 +69,10 @@ public class PongServer : MonoBehaviour
     public int ConnectionCount => _connections.Count;
     public IReadOnlyList<ClientConnection> Connections => _connections;
 
+    /// <summary>
+    /// Start TCP listener AND bind UDP on the same port. Both channels are required:
+    /// TCP for control, UDP for real-time STATE/PADDLE.
+    /// </summary>
     public bool Listen()
     {
         if (_tcp != null) {
@@ -121,7 +134,10 @@ public class PongServer : MonoBehaviour
         PollUdp();
     }
 
-    /// <summary>Send a real-time STATE datagram to every client whose UDP endpoint is known.</summary>
+    /// <summary>
+    /// Send a STATE datagram to every client whose UDP endpoint is known (learned via HELLO).
+    /// Called ~30/s by PongServerGame.BroadcastState. Non-blocking: a slow client cannot stall others.
+    /// </summary>
     public void BroadcastStateUdp(string framedMessage)
     {
         if (!_udp.IsOpen) return;
@@ -132,6 +148,7 @@ public class PongServer : MonoBehaviour
         }
     }
 
+    /// <summary>Drain inbound UDP datagrams and dispatch HELLO / PADDLE.</summary>
     void PollUdp()
     {
         if (!_udp.IsOpen) return;
@@ -141,6 +158,11 @@ public class PongServer : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// UDP ingress router. Only two message types are accepted:
+    ///   HELLO  — register/refresh the sender's UdpEndpoint for this token
+    ///   PADDLE — update endpoint + forward angle to PongServerGame via OnUdpPaddle
+    /// </summary>
     void HandleUdpDatagram(PongUdpSocket.Datagram datagram)
     {
         string message = datagram.Message;
@@ -178,6 +200,7 @@ public class PongServer : MonoBehaviour
             // for up to ~40 ms, which is exactly the "saccaded ball" symptom on LAN.
             ConfigureSocket(tcpClient);
             var conn = new ClientConnection { Tcp = tcpClient };
+            // Step 2 of UDP bootstrap: generate token, register in _byToken, send over TCP.
             conn.UdpToken = PongProtocol.NewUdpToken();
             _connections.Add(conn);
             _byToken[conn.UdpToken] = conn;
@@ -185,8 +208,7 @@ public class PongServer : MonoBehaviour
             var remote = (IPEndPoint)tcpClient.Client.RemoteEndPoint;
             Debug.Log("PongServer: new connection from " + remote.Address);
 
-            // Hand the UDP token over the reliable channel before any game state, so the client
-            // can start registering its UDP endpoint as soon as it is assigned.
+            // Client must receive this before it can send HELLO/PADDLE on the UDP channel.
             Send(conn, PongProtocol.FormatUdpToken(conn.UdpToken));
             OnClientConnected?.Invoke(conn);
         }

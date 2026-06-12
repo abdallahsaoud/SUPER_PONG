@@ -7,49 +7,73 @@ using System.Text;
 /// Each message is a single line ending with '\n'. Fields are space-separated.
 /// Floats use invariant culture so '.' is the decimal separator on every locale.
 ///
-/// Transport split (hybrid TCP + UDP):
-///   - Reliable/ordered control messages travel over TCP (everything below except STATE/PADDLE/HELLO).
-///   - The high-frequency real-time channel (STATE server->client, PADDLE client->server) travels
-///     over UDP on the same port. HELLO registers a client's UDP endpoint with the server.
+/// ── HYBRID TRANSPORT (presentation anchor) ───────────────────────────────────
+/// The game uses TWO transports on the SAME port (default 25000):
 ///
-/// Client -> Server (TCP):
+///   TCP  = reliable, ordered byte stream  → control / events (lobby, scores, disconnect)
+///   UDP  = unreliable, message-oriented   → real-time channel (~30 Hz)
+///
+/// Why not TCP-only for everything?
+///   • Nagle's algorithm can delay tiny packets (~40 ms) → input lag on PADDLE.
+///   • Head-of-line blocking: one lost TCP segment stalls ALL later STATE updates
+///     → visible "teleport" of ball and remote paddles on a bad link.
+///   • UDP lets us drop a single stale datagram without blocking fresher ones.
+///
+/// Why keep TCP at all?
+///   • Connection lifecycle (accept/disconnect) is naturally reliable.
+///   • Lobby messages (READY, ASSIGN, WIN) must not be lost.
+///   • The UDP token is delivered once over TCP before any real-time traffic starts.
+///
+/// ── CONNECTION SETUP (chronological) ─────────────────────────────────────────
+///   1. Client TCP-connects to server.
+///   2. Client binds an ephemeral UDP socket (PongUdpSocket.Bind(0)).
+///   3. Server sends UDPTOKEN over TCP (per-connection random 64-bit secret).
+///   4. Client sends HELLO over UDP with that token → server records UdpEndpoint.
+///   5. Client retries HELLO until first STATE arrives (NAT / firewall tolerance).
+///   6. Game loop: PADDLE (client→server) and STATE (server→clients) over UDP.
+///
+/// ── CLIENT → SERVER (TCP) ────────────────────────────────────────────────────
 ///   NAME <displayName>                       (tail may contain spaces)
-///   READY                                      (explicit opt-in to the next match; required from each
-///                                               participant before a finished round can restart)
-///   POSTGAME                                   (player is on the end-of-round menu, not readied)
-///   COLOR <paletteSlot>                        (request a palette color 0..MaxPlayers-1; server
-///                                               swaps with whoever currently holds it, if taken)
+///   READY                                      (explicit opt-in to the next match)
+///   POSTGAME                                   (on end-of-round menu, not readied)
+///   COLOR <paletteSlot>                        (request palette color; server swaps on conflict)
 ///
-/// Client -> Server (UDP):
+/// ── CLIENT → SERVER (UDP) ────────────────────────────────────────────────────
 ///   HELLO  <token>                           (registers/refreshes this client's UDP endpoint)
-///   PADDLE <token> <ringAngleRadians>        (token identifies the owning client; spoof-resistant)
+///   PADDLE <token> <ringAngleRadians>        (token binds datagram to TCP connection; ~30/s)
 ///
-/// Server -> Client (TCP):
-///   UDPTOKEN <token>                         (per-connection secret used to address the UDP channel)
+/// ── SERVER → CLIENT (TCP) ────────────────────────────────────────────────────
+///   UDPTOKEN <token>                         (hand out before any UDP traffic)
 ///   ASSIGN <lineIndex> <lineCount>
-///   NAMES <name0><tab><name1>...               (tab-separated, one per line slot)
-///   COLORS <slot0> <slot1> ... <slotN-1>       (palette index per line; -1 = unassigned)
+///   NAMES <name0><tab><name1>...
+///   COLORS <slot0> <slot1> ... <slotN-1>       (-1 = unassigned)
 ///   ROSTER <lineCount>
 ///   SCORE  <lineIndex> <score>
-///   DAMAGE <lineIndex> <state>            (state: 0=Intact, 2=Eliminated)
+///   DAMAGE <lineIndex> <state>            (0=Intact, 2=Eliminated)
 ///   WIN    <lineIndex> <winnerName>
 ///   RESET
-///   COUNTDOWN <secondsRemaining>           (0 = hide restart timer)
-///   JOINCOUNTDOWN <secondsRemaining>       (lobby waits for more players)
+///   COUNTDOWN / JOINCOUNTDOWN <secondsRemaining>
 ///
-/// Server -> Client (UDP):
+/// ── SERVER → CLIENT (UDP) ────────────────────────────────────────────────────
 ///   STATE <seq> <serverTimeMs> <ballX> <ballY> <ballVX> <ballVY> <angle0> ... <angleN-1>
-///         (seq: monotonically increasing, client drops stale/out-of-order; serverTimeMs + ball
-///          velocity drive snapshot interpolation and ball extrapolation on the client)
+///
+///   Field guide (STATE):
+///     seq           — monotonic; client drops datagrams with seq &lt;= lastSeq (UDP reordering)
+///     serverTimeMs  — Stopwatch on server; drives interpolation clock on PongNetView
+///     ballVX/VY     — lets client extrapolate ball through packet gaps (dead reckoning)
+///     angleN        — authoritative ring angle per line (remote paddles; local uses input)
+///
+/// See also: Net/README_UDP.md (presentation walkthrough) and Assets/Pong/README.md (setup).
 /// </summary>
 public static class PongProtocol
 {
     public const char MessageDelimiter = '\n';
     public const char FieldSeparator = ' ';
 
+    // ── UDP real-time message identifiers (see class header for wire format) ──
     public const string MsgPaddle    = "PADDLE";
     public const string MsgHello     = "HELLO";
-    public const string MsgUdpToken  = "UDPTOKEN";
+    public const string MsgUdpToken  = "UDPTOKEN";   // TCP-only: bootstrap for UDP channel
     public const string MsgName      = "NAME";
     public const string MsgReady     = "READY";
     public const string MsgPostGame  = "POSTGAME";
@@ -148,6 +172,10 @@ public static class PongProtocol
     public static string FormatAssign(int lineIndex, int lineCount)
         => MsgAssign + FieldSeparator + lineIndex.ToString(Inv) + FieldSeparator + lineCount.ToString(Inv) + MessageDelimiter;
 
+    /// <summary>
+    /// Build a STATE datagram for UDP broadcast. Called ~30/s by PongServerGame.BroadcastState.
+    /// The client parses this in PongClient.DispatchUdp and feeds PongNetView for interpolation.
+    /// </summary>
     public static string FormatState(
         uint seq, long serverTimeMs,
         float ballX, float ballY, float ballVX, float ballVY,
@@ -258,7 +286,10 @@ public static class PongProtocol
     public static bool TryParseLong(string s, out long value)
         => long.TryParse(s, NumberStyles.Integer, Inv, out value);
 
-    /// <summary>Random, hard-to-guess per-connection UDP token (decimal ulong, no separators).</summary>
+    /// <summary>
+    /// Generate a unique per-TCP-connection secret. The server maps token → ClientConnection
+    /// so incoming HELLO/PADDLE datagrams can be attributed without trusting source IP alone.
+    /// </summary>
     public static string NewUdpToken()
     {
         var bytes = new byte[8];
@@ -273,8 +304,10 @@ public static class PongProtocol
 
 /// <summary>
 /// Accumulates bytes received on a TCP stream and yields complete '\n'-delimited messages.
-/// TCP is a stream: a single read can return part of a message or several messages glued together.
-/// This buffer keeps the leftover until the next read completes a line.
+///
+/// TCP is a byte stream, NOT message-oriented: a single read can return half a message
+/// or several messages glued together. This buffer keeps leftover bytes until the next
+/// read completes a line. UDP does NOT use this class — each datagram is one message.
 /// </summary>
 public class PongMessageBuffer
 {

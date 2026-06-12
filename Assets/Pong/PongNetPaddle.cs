@@ -1,6 +1,14 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+/// <summary>
+/// Locally-controlled paddle (client-with-local-control paradigm).
+///
+/// The player's own paddle moves instantly from keyboard input (zero input lag).
+/// Position is streamed to the server via UDP PADDLE messages (~30/s through
+/// PongClient.SendPaddle). Remote paddles are rendered by PongNetView from
+/// interpolated STATE snapshots instead.
+/// </summary>
 public class PongNetPaddle : MonoBehaviour
 {
     public float Speed = 2.8f;
@@ -39,6 +47,7 @@ public class PongNetPaddle : MonoBehaviour
         if (_sendAccumulator >= interval) {
             _sendAccumulator = 0f;
             if (!Mathf.Approximately(_ringAngleRad, _lastSentAngle)) {
+                // Real-time input path: UDP PADDLE (not TCP) — see PongClient.SendPaddle.
                 Client.SendPaddle(_ringAngleRad);
                 _lastSentAngle = _ringAngleRad;
             }

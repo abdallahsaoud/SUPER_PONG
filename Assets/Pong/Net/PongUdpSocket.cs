@@ -5,26 +5,39 @@ using System.Text;
 using UnityEngine;
 
 /// <summary>
-/// Thin bidirectional UDP transport shared by the Pong client and server for the
-/// real-time channel (STATE / PADDLE / HELLO). Unlike TCP, UDP is message-oriented:
-/// one datagram in == one datagram out, so there is no need for the newline framing
-/// used by <see cref="PongMessageBuffer"/>.
+/// Thin bidirectional UDP transport shared by PongClient and PongServer.
 ///
-/// Receive is non-blocking: <see cref="Poll"/> drains every datagram currently
-/// queued on the socket and returns them with their source endpoint. Send never
-/// blocks meaningfully — a slow/lossy peer cannot stall the game loop the way a
-/// full TCP send buffer can.
+/// ── ROLE IN THE STACK ────────────────────────────────────────────────────────
+/// This is the lowest layer of the real-time channel. It knows nothing about
+/// PADDLE/STATE/HELLO — it only sends/receives UTF-8 strings as datagrams.
+/// Message semantics live in <see cref="PongProtocol"/>; routing lives in
+/// <see cref="PongServer"/> / <see cref="PongClient"/>.
+///
+/// ── TCP vs UDP FRAMING ───────────────────────────────────────────────────────
+/// TCP is a byte stream: partial reads and glued messages require
+/// <see cref="PongMessageBuffer"/> (newline framing).
+/// UDP is message-oriented: one Send() == one Receive() == one game message.
+/// Our Format* helpers still append '\n' for TCP compatibility; Poll() strips it.
+///
+/// ── NON-BLOCKING DESIGN ──────────────────────────────────────────────────────
+/// Poll() never blocks the Unity game loop. A slow peer cannot stall the server
+/// the way a full TCP send buffer can. MaxDatagramsPerPoll caps work per frame.
+///
+/// Usage:
+///   Server: Bind(25000) on the same port as TcpListener.
+///   Client: Bind(0) for an ephemeral local port, Send to server IP:25000.
 /// </summary>
 public class PongUdpSocket
 {
+    /// <summary>One received UDP datagram: parsed message + sender endpoint.</summary>
     public struct Datagram
     {
         public string Message;
         public IPEndPoint Source;
     }
 
-    // Upper bound on datagrams drained per Poll() so a flood (or a buggy peer) can never spin a
-    // single frame forever; leftovers are simply read on the next frame.
+    // Safety valve: without a cap, a malicious or buggy peer flooding datagrams could
+    // spin Poll() for an entire frame and freeze the game loop.
     const int MaxDatagramsPerPoll = 2048;
 
     UdpClient _udp;
@@ -42,7 +55,10 @@ public class PongUdpSocket
         }
     }
 
-    /// <summary>Bind to a local port (server). Pass 0 for an ephemeral port (client).</summary>
+    /// <summary>
+    /// Bind to a local port. Server passes the game port (25000); client passes 0
+    /// so the OS assigns an ephemeral port for outbound datagrams.
+    /// </summary>
     public bool Bind(int port)
     {
         if (_udp != null) {
@@ -66,6 +82,10 @@ public class PongUdpSocket
         }
     }
 
+    /// <summary>
+    /// Fire-and-forget send. UDP has no guaranteed delivery — callers must tolerate loss
+    /// (STATE is sent every frame; PADDLE is sent only when angle changes).
+    /// </summary>
     public void Send(string message, IPEndPoint destination)
     {
         if (_udp == null || destination == null) return;
@@ -77,7 +97,10 @@ public class PongUdpSocket
         }
     }
 
-    /// <summary>Drain all datagrams currently queued. Never blocks.</summary>
+    /// <summary>
+    /// Drain all datagrams currently queued on the socket (non-blocking).
+    /// Returns a reused internal list — copy results before the next Poll() if needed.
+    /// </summary>
     public List<Datagram> Poll()
     {
         _scratch.Clear();
@@ -88,8 +111,8 @@ public class PongUdpSocket
             while (_udp.Available > 0 && budget-- > 0) {
                 byte[] data = _udp.Receive(ref _source);
                 string message = Encoding.UTF8.GetString(data);
-                // Format* helpers append a trailing '\n' (TCP framing). On UDP a datagram is
-                // already one message, so strip it (plus a tolerated '\r') before parsing.
+                // Format* helpers append '\n' for TCP. On UDP one datagram == one message,
+                // so strip trailing newline (and optional '\r') before protocol parsing.
                 message = message.TrimEnd('\r', '\n');
                 _scratch.Add(new Datagram {
                     Message = message,

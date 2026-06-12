@@ -6,20 +6,29 @@ using System.Collections.Generic;
 /// <summary>One authoritative world snapshot decoded from a STATE datagram.</summary>
 public struct PongStateSnapshot
 {
+    /// <summary>Monotonic sequence from server; used to drop stale/out-of-order UDP datagrams.</summary>
     public uint Seq;
+    /// <summary>Server Stopwatch time in ms; drives the interpolation clock in PongNetView.</summary>
     public long ServerTimeMs;
     public Vector2 BallPos;
+    /// <summary>Ball velocity (units/s) for dead reckoning when packets are lost.</summary>
     public Vector2 BallVel;
+    /// <summary>Authoritative ring angle per line slot (radians).</summary>
     public float[] Angles;
 }
 
 /// <summary>
 /// Hybrid TCP + UDP client for Multiplayer Pong.
-///   - TCP (reliable): handshake, ASSIGN / ROSTER / NAMES / COLORS / SCORE / DAMAGE / WIN /
-///     RESET / COUNTDOWN, plus the UDPTOKEN handed out by the server.
-///   - UDP (real-time): outgoing PADDLE (~30/s) and incoming STATE.
 ///
-/// Adapted from Assets/Demos/TCP/TCPClient.cs (newline framing) and the UDP demo helpers.
+/// ── TRANSPORT SPLIT ──────────────────────────────────────────────────────────
+///   TCP  — reliable control channel: handshake, UDPTOKEN, ASSIGN, lobby, scores…
+///   UDP  — real-time channel: outgoing PADDLE (~30/s), incoming STATE (~30/s)
+///
+/// ── UDP LIFECYCLE (see Net/README_UDP.md) ────────────────────────────────────
+///   Connect() → OpenUdpChannel() → receive UDPTOKEN (TCP) → HELLO (UDP, retried)
+///   → first STATE (UDP) → game loop SendPaddle / DispatchUdp
+///
+/// Adapted from Assets/Demos/TCP/TCPClient.cs (newline framing) and UDP demo helpers.
 /// </summary>
 public class PongClient : MonoBehaviour
 {
@@ -38,11 +47,12 @@ public class PongClient : MonoBehaviour
     readonly byte[] _readBuffer = new byte[4096];
     float _nextDebugStateLogTime;
 
+    // ── UDP real-time channel state ───────────────────────────────────────────
     readonly PongUdpSocket _udp = new PongUdpSocket();
-    string _udpToken = string.Empty;
-    IPEndPoint _serverUdpEndpoint;
-    uint _lastStateSeq;
-    bool _gotFirstState;
+    string _udpToken = string.Empty;          // secret from UDPTOKEN (TCP); included in every PADDLE/HELLO
+    IPEndPoint _serverUdpEndpoint;            // server IP:port for outbound datagrams
+    uint _lastStateSeq;                       // drop STATE datagrams with seq <= this (UDP reordering)
+    bool _gotFirstState;                      // once true, stop retrying HELLO
     float _helloAccumulator;
 
     public bool IsConnected => _tcp != null && _tcp.Connected;
@@ -185,6 +195,10 @@ public class PongClient : MonoBehaviour
 
     public void Close() => CloseInternal();
 
+    /// <summary>
+    /// Open the UDP socket after TCP connect succeeds. Binds an ephemeral local port and
+    /// remembers the server's UDP endpoint (same IP/port as TCP). HELLO/PADDLE go here.
+    /// </summary>
     void OpenUdpChannel()
     {
         _udpToken = string.Empty;
@@ -203,7 +217,10 @@ public class PongClient : MonoBehaviour
         }
     }
 
-    /// <summary>Send a paddle position to the server over UDP. Cheap; safe to call ~30/s.</summary>
+    /// <summary>
+    /// Send local paddle angle to server over UDP (~30/s from PongNetPaddle).
+    /// Requires UDPTOKEN (from TCP) and a bound UDP socket. Silent no-op if not ready.
+    /// </summary>
     public void SendPaddle(float y)
     {
         if (!_udp.IsOpen || _serverUdpEndpoint == null || string.IsNullOrEmpty(_udpToken)) return;
@@ -256,6 +273,10 @@ public class PongClient : MonoBehaviour
         PumpUdp();
     }
 
+    /// <summary>
+    /// Per-frame UDP pump: retry HELLO until first STATE, then drain incoming datagrams.
+    /// Called from Update() after TCP reads.
+    /// </summary>
     void PumpUdp()
     {
         if (!_udp.IsOpen) return;
@@ -278,6 +299,11 @@ public class PongClient : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Parse an incoming STATE datagram. This is the ONLY UDP message handled on the client.
+    /// Stale/out-of-order datagrams (seq &lt;= _lastStateSeq) are discarded before rendering.
+    /// Surviving snapshots are forwarded to PongNetView via OnState for interpolation.
+    /// </summary>
     void DispatchUdp(string message)
     {
         if (string.IsNullOrEmpty(message)) return;
@@ -340,6 +366,7 @@ public class PongClient : MonoBehaviour
 
         switch (head) {
             case PongProtocol.MsgUdpToken: {
+                // Step 3 of UDP bootstrap (see PongProtocol header): store token, announce endpoint.
                 if (parts.Length >= 2 && !string.IsNullOrEmpty(parts[1])) {
                     _udpToken = parts[1];
                     // Announce our endpoint immediately; PumpUdp keeps retrying until STATE arrives.

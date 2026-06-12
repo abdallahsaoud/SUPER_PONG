@@ -1,6 +1,25 @@
 using UnityEngine;
 using System.Collections.Generic;
 
+/// <summary>
+/// Renders the networked game world from UDP STATE snapshots.
+///
+/// ── WHY THIS EXISTS (presentation key point) ─────────────────────────────────
+/// Raw UDP STATE arrives at ~30 Hz and can be lost or reordered. Rendering the
+/// latest packet directly causes visible jumps. This component implements:
+///
+///   1. Snapshot buffer   — queue of past world states (time-stamped)
+///   2. Render delay      — display ~100 ms behind server time (InterpolationDelayMs)
+///   3. Interpolation     — lerp ball + remote paddles between two snapshots
+///   4. Extrapolation     — predict ball with velocity during packet gaps (dead reckoning)
+///
+/// The LOCAL paddle is NOT interpolated from network data (client-with-local-control):
+/// PongNetPaddle moves it instantly and sends PADDLE over UDP; only remote paddles use
+/// the interpolated angles from SampleWorld().
+///
+/// Data flow: PongClient.DispatchUdp → OnState → HandleState → EnqueueSnapshot
+///            → Update → AdvanceRenderClock → SampleWorld → apply to transforms.
+/// </summary>
 public class PongNetView : MonoBehaviour
 {
     public PongClient Client;
@@ -29,6 +48,7 @@ public class PongNetView : MonoBehaviour
         return Client != null && Client.LineIndex >= 0 && IsLineEliminated(Client.LineIndex);
     }
 
+    /// <summary>One buffered world sample from a STATE datagram, keyed by server time.</summary>
     struct Snapshot
     {
         public double TimeMs;
@@ -38,6 +58,7 @@ public class PongNetView : MonoBehaviour
     }
 
     readonly List<Snapshot> _snaps = new List<Snapshot>(32);
+    /// <summary>Local render clock in server-time milliseconds (runs behind latest snapshot).</summary>
     double _renderTimeMs;
     bool _renderInit;
     float[] _sampleAngles;
@@ -204,6 +225,7 @@ public class PongNetView : MonoBehaviour
         RefreshAllPlatformVisuals();
     }
 
+    /// <summary>Entry point for each incoming STATE snapshot from the UDP channel.</summary>
     void HandleState(in PongStateSnapshot snap)
     {
         float[] angles = snap.Angles;
@@ -359,6 +381,10 @@ public class PongNetView : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Advance the render clock each frame. Target = latestServerTime - InterpolationDelayMs.
+    /// Capped during packet gaps so ball extrapolation stays bounded (MaxExtrapolationMs).
+    /// </summary>
     void AdvanceRenderClock(float dt)
     {
         if (_snaps.Count == 0) return;
