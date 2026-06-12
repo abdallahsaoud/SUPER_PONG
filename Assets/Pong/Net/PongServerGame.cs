@@ -212,6 +212,10 @@ public class PongServerGame : MonoBehaviour
             rt.Health = CircleArenaConfig.HealthEliminated;
             SetClientInGame(client, false);
             BroadcastRosterAndAssign();
+            // One DAMAGE for the new spectator line only. Re-broadcasting every eliminated line
+            // on roster changes made survivors with a stale LineIndex receive DAMAGE for their
+            // old slot and instantly see "Game Over".
+            _server.Broadcast(PongProtocol.FormatDamage(idx, CircleArenaConfig.HealthEliminated));
             Debug.Log("PongServerGame: " + rt.DisplayName + " joined mid-match as spectator on line "
                 + idx + " (total " + Lines.Count + ").");
             if (EnableDiagnostics) {
@@ -775,20 +779,6 @@ public class PongServerGame : MonoBehaviour
             // index shifted would silently control a ghost slot.
             rt.Owner.LineIndex = i;
             _server.Send(rt.Owner, PongProtocol.FormatAssign(i, count, IsMidMatchSpectator(rt.Owner)));
-        }
-
-        // Re-broadcast elimination whenever the roster changes. SetPlatformCount on clients
-        // recreates all paddles as active, so DAMAGE must land after ROSTER/ASSIGN sizing.
-        BroadcastLineHealth();
-    }
-
-    void BroadcastLineHealth()
-    {
-        if (_runtime == null) return;
-        for (int i = 0; i < _runtime.Length; i++) {
-            var rt = _runtime[i];
-            if (!rt.Assigned || rt.Health < CircleArenaConfig.HealthEliminated) continue;
-            _server.Broadcast(PongProtocol.FormatDamage(i, rt.Health));
         }
     }
 

@@ -119,23 +119,23 @@ public class PongClientConnectOverlay : MonoBehaviour
     void HandleDamage(int lineIndex, int state)
     {
         if (state < CircleArenaConfig.HealthEliminated) return;
-        // Once the match is over, the match-over popup takes over: don't re-flag the local
-        // player as "lost" (which would otherwise resurface the You've-lost panel).
         if (_matchOver) return;
-        if (Client != null && lineIndex == Client.LineIndex) {
-            if (Client.QueuedForNextMatch || _waitingForNextRound) {
-                _spectating = true;
-                _waitingForNextRound = true;
-                _lost = false;
-                if (!Client.QueuedForNextMatch) Client.MarkSpectating();
-                return;
-            }
-            _lost = true;
-            _spectating = false;
-            NotifyPostGameMenu();
+        if (Client == null || lineIndex != Client.LineIndex) return;
+
+        // Health sync rebroadcasts (or DAMAGE arriving before ASSIGN retargets LineIndex)
+        // must not pop the local "Game Over" panel for a player still in the round.
+        if (View != null && View.IsLineEliminated(lineIndex)) return;
+
+        if (Client.QueuedForNextMatch || _waitingForNextRound) {
+            _spectating = true;
+            _waitingForNextRound = true;
+            _lost = false;
+            if (!Client.QueuedForNextMatch) Client.MarkSpectating();
             return;
         }
-        SyncLostFromView();
+        _lost = true;
+        _spectating = false;
+        NotifyPostGameMenu();
     }
 
     void HandleWin(int lineIndex)
