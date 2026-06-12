@@ -252,37 +252,33 @@ public class PongServerGame : MonoBehaviour
         if (idx < 0 || idx >= Lines.Count) return;
 
         if (EnableDiagnostics) {
-            PongDiagnostics.Log("ClientDisconnected line=" + idx + " remaining=" + (Lines.Count - 1)
-                + (MatchInProgress ? " deferred=1" : ""));
+            PongDiagnostics.Log("ClientDisconnected line=" + idx + " remaining=" + (Lines.Count - 1));
         }
 
         client.LineIndex = -1;
 
-        if (MatchInProgress) {
-            // Don't remove/re-index the line during a live round — that would re-spread angles and
-            // teleport the remaining players. Instead, vacate it: drop the owner and mark it
-            // eliminated so the ball ignores it and clients hide its platform. The line is actually
-            // removed (and angles re-spread) at the next round boundary by CleanupVacatedLines.
-            var leaving = _runtime[idx];
-            leaving.Owner = null;
-            leaving.Health = CircleArenaConfig.HealthEliminated;
-            _server.Broadcast(PongProtocol.FormatDamage(idx, CircleArenaConfig.HealthEliminated));
-
-            // A survivor (or nobody) left alive: end the round with a WIN rather than silently
-            // dropping into "waiting". GetAssignedCount ignores vacated ghosts, so this also
-            // covers the case where the last real player disconnected.
-            CheckForLastPlayerStanding();
-            if (GetAssignedCount() < MinPlayersToPlay
-                && _state != BallState.WaitingForPlayers) {
-                EnterWaitingForPlayers("player disconnected mid-match");
-            }
-            return;
-        }
-
+        // Remove the line immediately so a reconnect can't resurrect a stale "ghost" paddle.
         Lines.RemoveAt(idx);
         ShrinkRuntimeAfterRemove(idx);
-        ReassignLineIndices();
+
+        if (_state == BallState.Playing) {
+            // Mid-match: do NOT teleport survivors to canonical angles. Doing so would snap
+            // their paddle onto the in-flight ball and trigger a phantom elimination, which
+            // is exactly what makes another player wrongly "lose" when the eliminated leaver
+            // disconnects. We still need to make sure two survivors aren't overlapping under
+            // the (now wider) platform arc for the smaller player count.
+            EnforceSurvivorSeparation();
+        } else {
+            RespreadPlayerAngles();
+        }
+
         BroadcastRosterAndAssign();
+
+        // A survivor (or nobody) left alive: end the round with a WIN rather than silently
+        // dropping into "waiting".
+        if (_state == BallState.Playing) {
+            CheckForLastPlayerStanding();
+        }
 
         if (GetAssignedCount() < MinPlayersToPlay
             && _state != BallState.WaitingForPlayers) {
@@ -290,38 +286,12 @@ public class PongServerGame : MonoBehaviour
         }
     }
 
-    void ReassignLineIndices()
-    {
-        RespreadPlayerAngles();
-        BroadcastRosterAndAssign();
-    }
-
     /// <summary>
-    /// True while a round's roster is locked (pre-match countdown or active play). Joins/leaves
-    /// during this window must not re-spread angles, otherwise live paddles teleport/overlap.
+    /// True while a round's roster is locked (pre-match countdown or active play). A player who
+    /// joins during this window must not re-spread angles (which would teleport live paddles); they
+    /// spectate the current round and are folded in at the next round boundary.
     /// </summary>
     bool MatchInProgress => _state == BallState.Starting || _state == BallState.Playing;
-
-    /// <summary>
-    /// Removes lines whose owner has gone (vacated mid-match by a disconnect) and re-spreads the
-    /// survivors. Called only at round boundaries so it never disturbs a live round.
-    /// </summary>
-    void CleanupVacatedLines()
-    {
-        if (_runtime == null) return;
-        bool changed = false;
-        for (int i = Lines.Count - 1; i >= 0; i--) {
-            if (i < _runtime.Length && _runtime[i] != null && _runtime[i].Owner == null) {
-                Lines.RemoveAt(i);
-                ShrinkRuntimeAfterRemove(i);
-                changed = true;
-            }
-        }
-        if (changed) {
-            RespreadPlayerAngles();
-            BroadcastRosterAndAssign();
-        }
-    }
 
     void HandleMessage(PongServer.ClientConnection client, string message)
     {
@@ -342,7 +312,7 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
-        if (head == PongProtocol.MsgPostGame || head == PongProtocol.MsgSpectate) {
+        if (head == PongProtocol.MsgPostGame) {
             client.ReadyForNextMatch = false;
             SetClientInGame(client, false);
             return;
@@ -410,10 +380,8 @@ public class PongServerGame : MonoBehaviour
         // Readiness is consumed by the match start; the next round will require a fresh opt-in.
         ClearAllReadyForNextMatch();
         BroadcastCountdown(0);
-        // Fold in roster changes that were deferred during the previous round: drop lines left by
-        // mid-match disconnects, then re-spread everyone (including spectators who joined mid-round)
-        // exactly once. This is the only point where angles change for an established player.
-        CleanupVacatedLines();
+        // Re-spread everyone — including spectators who joined mid-round — exactly once, at the
+        // round boundary. This is the only point where angles change for an established player.
         for (int i = 0; i < _runtime.Length; i++) {
             _runtime[i].Health = CircleArenaConfig.HealthIntact;
         }
@@ -618,9 +586,6 @@ public class PongServerGame : MonoBehaviour
         _winnerLine = -1;
         _ballPos = BallStart;
         _ballDir = Vector2.zero;
-        // The round is over: it's now safe to drop any lines vacated by mid-match disconnects so the
-        // lobby roster reflects who's actually still connected.
-        CleanupVacatedLines();
         _server.Broadcast(PongProtocol.FormatReset());
         Debug.Log("PongServerGame: waiting (" + GetAssignedCount() + " connected) reason=" + reason);
     }
@@ -767,6 +732,28 @@ public class PongServerGame : MonoBehaviour
             Lines[i].RingAngleRad = angle;
             if (_runtime != null && i < _runtime.Length) {
                 _runtime[i].RingAngleRad = angle;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Keeps mid-match survivors at their current ring angles when a player leaves, only
+    /// nudging them apart if the wider 2-player arc would now make them overlap. This is the
+    /// no-teleport alternative to <see cref="RespreadPlayerAngles"/> — using respread mid-play
+    /// would snap a paddle onto the in-flight ball and cause a phantom elimination.
+    /// </summary>
+    void EnforceSurvivorSeparation()
+    {
+        if (_runtime == null) return;
+        for (int i = 0; i < _runtime.Length; i++) {
+            var rt = _runtime[i];
+            if (rt == null || !rt.Assigned) continue;
+            if (rt.Health >= CircleArenaConfig.HealthEliminated) continue;
+
+            float clamped = ClampPlatformAngleAgainstPlayers(i, rt.RingAngleRad, rt.RingAngleRad);
+            if (!Mathf.Approximately(clamped, rt.RingAngleRad)) {
+                rt.RingAngleRad = clamped;
+                Lines[i].RingAngleRad = clamped;
             }
         }
     }

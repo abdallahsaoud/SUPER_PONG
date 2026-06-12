@@ -43,7 +43,9 @@ high-level netcode is used, in line with the course constraint
 - `PongNetPaddle.cs` — locally-controlled line (InputSystem → local movement →
   send PADDLE to server).
 - `PongNetView.cs` — renders ball + remote paddles from `STATE` with smoothing.
-- `PongServerUI.cs` / `PongClientUI.cs` — optional UIs for listen/connect.
+- `PongServerUI.cs` — optional server-side listen/host UI.
+- `PongClientConnectOverlay.cs` — IMGUI connect screen + end-of-round menu
+  (lost / match-over / awaiting / countdown panels).
 - `PongServer.unity` / `PongClient.unity` — minimal scenes that just place a
   `PongBootstrap`.
 

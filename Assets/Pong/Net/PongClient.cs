@@ -54,7 +54,6 @@ public class PongClient : MonoBehaviour
     public delegate void DamageHandler(int lineIndex, int state);
     public delegate void WinHandler(int lineIndex);
     public delegate void ResetHandler();
-    public delegate void GeometryHandler(IList<float> lineXs);
     public delegate void RosterHandler(int lineCount);
     public delegate void NamesHandler(IList<string> playerNames);
     public delegate void ColorsHandler(IList<int> colorSlots);
@@ -67,7 +66,6 @@ public class PongClient : MonoBehaviour
     public DamageHandler   OnDamage;
     public WinHandler      OnWin;
     public ResetHandler    OnReset;
-    public GeometryHandler OnGeometry;
     public NamesHandler    OnNames;
     public ColorsHandler   OnColors;
     public CountdownHandler OnCountdown;
@@ -133,13 +131,6 @@ public class PongClient : MonoBehaviour
         SendFramed(PongProtocol.FormatPostGame());
     }
 
-    public void SendSpectate()
-    {
-        if (!IsConnected) return;
-        ParticipatesInGame = false;
-        SendFramed(PongProtocol.FormatSpectate());
-    }
-
     public bool Connect()
     {
         if (_tcp != null) {
@@ -169,6 +160,10 @@ public class PongClient : MonoBehaviour
                     + ". Check IP, port, firewall, and that the host server is running.");
             }
             _tcp.EndConnect(result);
+            // Disable Nagle's algorithm on the client socket too: PADDLE packets are sent at
+            // ~30 Hz and are tiny, so Nagle would otherwise hold them for up to ~40 ms waiting
+            // to coalesce — adding input lag and contributing to perceived ball jitter.
+            ConfigureSocket(_tcp);
             OpenUdpChannel();
             LastError = string.Empty;
             Debug.Log("PongClient connected to " + DestinationIP + ":" + DestinationPort);
@@ -215,6 +210,18 @@ public class PongClient : MonoBehaviour
             _tcp.GetStream().Write(bytes, 0, bytes.Length);
         } catch (System.Exception e) {
             Debug.LogWarning("PongClient send error: " + e.Message);
+        }
+    }
+
+    static void ConfigureSocket(TcpClient tcp)
+    {
+        if (tcp == null) return;
+        try {
+            tcp.NoDelay = true;
+            tcp.SendBufferSize = 8192;
+            tcp.ReceiveBufferSize = 8192;
+        } catch (System.Exception ex) {
+            Debug.LogWarning("PongClient socket tune error: " + ex.Message);
         }
     }
 
@@ -402,13 +409,6 @@ public class PongClient : MonoBehaviour
                     IsJoinLobbyCountdown = seconds > 0;
                     OnCountdown?.Invoke(seconds);
                 }
-                break;
-            }
-            case PongProtocol.MsgGeometry: {
-                int n = parts.Length - 1;
-                var xs = new float[n];
-                for (int i = 0; i < n; i++) PongProtocol.TryParseFloat(parts[1 + i], out xs[i]);
-                OnGeometry?.Invoke(xs);
                 break;
             }
             case PongProtocol.MsgColors: {
