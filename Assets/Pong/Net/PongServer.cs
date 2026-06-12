@@ -112,6 +112,10 @@ public class PongServer : MonoBehaviour
     {
         while (_tcp.Pending()) {
             TcpClient tcpClient = _tcp.AcceptTcpClient();
+            // Disable Nagle's algorithm: our STATE/PADDLE packets are tiny (<60 bytes) and
+            // sent at 30 Hz. With Nagle on, the OS holds them waiting for ACKs/coalescing
+            // for up to ~40 ms, which is exactly the "saccaded ball" symptom on LAN.
+            ConfigureSocket(tcpClient);
             var conn = new ClientConnection { Tcp = tcpClient };
             _connections.Add(conn);
 
@@ -119,6 +123,18 @@ public class PongServer : MonoBehaviour
             Debug.Log("PongServer: new connection from " + remote.Address);
 
             OnClientConnected?.Invoke(conn);
+        }
+    }
+
+    static void ConfigureSocket(TcpClient tcp)
+    {
+        if (tcp == null) return;
+        try {
+            tcp.NoDelay = true;
+            tcp.SendBufferSize = 8192;
+            tcp.ReceiveBufferSize = 8192;
+        } catch (System.Exception ex) {
+            Debug.LogWarning("PongServer socket tune error: " + ex.Message);
         }
     }
 

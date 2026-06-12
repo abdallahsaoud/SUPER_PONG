@@ -13,7 +13,6 @@ using System.Text;
 ///   READY                                      (explicit opt-in to the next match; required from each
 ///                                               participant before a finished round can restart)
 ///   POSTGAME                                   (player is on the end-of-round menu, not readied)
-///   SPECTATE                                   (player is watching only, not queued)
 ///
 /// Server -> Client:
 ///   ASSIGN <lineIndex> <lineCount>
@@ -37,14 +36,12 @@ public static class PongProtocol
     public const string MsgName      = "NAME";
     public const string MsgReady     = "READY";
     public const string MsgPostGame  = "POSTGAME";
-    public const string MsgSpectate  = "SPECTATE";
     public const string MsgAssign   = "ASSIGN";
     public const string MsgState    = "STATE";
     public const string MsgScore    = "SCORE";
     public const string MsgDamage   = "DAMAGE";
     public const string MsgWin      = "WIN";
     public const string MsgReset    = "RESET";
-    public const string MsgGeometry = "GEOMETRY";
     public const string MsgRoster   = "ROSTER";
     public const string MsgNames      = "NAMES";
     public const string MsgColors     = "COLORS";
@@ -81,7 +78,6 @@ public static class PongProtocol
 
     public static string FormatReady() => MsgReady + MessageDelimiter;
     public static string FormatPostGame() => MsgPostGame + MessageDelimiter;
-    public static string FormatSpectate() => MsgSpectate + MessageDelimiter;
 
     public static string FormatNames(IList<string> names)
     {
@@ -208,18 +204,6 @@ public static class PongProtocol
         sb.Append(MsgColors);
         for (int i = 0; i < slots.Count; i++) {
             sb.Append(FieldSeparator).Append(slots[i].ToString(Inv));
-        }
-        sb.Append(MessageDelimiter);
-        return sb.ToString();
-    }
-
-    /// <summary>Broadcast new X positions for every line. Sent after gap merge (line broken).</summary>
-    public static string FormatGeometry(IList<float> lineXs)
-    {
-        var sb = new StringBuilder(32);
-        sb.Append(MsgGeometry);
-        for (int i = 0; i < lineXs.Count; i++) {
-            sb.Append(FieldSeparator).Append(lineXs[i].ToString("0.###", Inv));
         }
         sb.Append(MessageDelimiter);
         return sb.ToString();

@@ -210,7 +210,18 @@ public class PongServerGame : MonoBehaviour
 
         Lines.RemoveAt(idx);
         ShrinkRuntimeAfterRemove(idx);
-        ReassignLineIndices();
+
+        if (_state == BallState.Playing) {
+            // Mid-match: do NOT teleport survivors to canonical angles. Doing so would snap
+            // their paddle onto the in-flight ball and trigger a phantom elimination, which
+            // is exactly what makes another player wrongly "lose" when the eliminated leaver
+            // disconnects. We still need to make sure two survivors aren't overlapping under
+            // the (now wider) platform arc for the smaller player count.
+            EnforceSurvivorSeparation();
+        } else {
+            RespreadPlayerAngles();
+        }
+
         BroadcastRosterAndAssign();
 
         client.LineIndex = -1;
@@ -227,12 +238,6 @@ public class PongServerGame : MonoBehaviour
             && _state != BallState.WaitingForPlayers) {
             EnterWaitingForPlayers("player disconnected");
         }
-    }
-
-    void ReassignLineIndices()
-    {
-        RespreadPlayerAngles();
-        BroadcastRosterAndAssign();
     }
 
     void HandleMessage(PongServer.ClientConnection client, string message)
@@ -254,7 +259,7 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
-        if (head == PongProtocol.MsgPostGame || head == PongProtocol.MsgSpectate) {
+        if (head == PongProtocol.MsgPostGame) {
             client.ReadyForNextMatch = false;
             SetClientInGame(client, false);
             return;
@@ -609,6 +614,28 @@ public class PongServerGame : MonoBehaviour
             Lines[i].RingAngleRad = angle;
             if (_runtime != null && i < _runtime.Length) {
                 _runtime[i].RingAngleRad = angle;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Keeps mid-match survivors at their current ring angles when a player leaves, only
+    /// nudging them apart if the wider 2-player arc would now make them overlap. This is the
+    /// no-teleport alternative to <see cref="RespreadPlayerAngles"/> — using respread mid-play
+    /// would snap a paddle onto the in-flight ball and cause a phantom elimination.
+    /// </summary>
+    void EnforceSurvivorSeparation()
+    {
+        if (_runtime == null) return;
+        for (int i = 0; i < _runtime.Length; i++) {
+            var rt = _runtime[i];
+            if (rt == null || !rt.Assigned) continue;
+            if (rt.Health >= CircleArenaConfig.HealthEliminated) continue;
+
+            float clamped = ClampPlatformAngleAgainstPlayers(i, rt.RingAngleRad, rt.RingAngleRad);
+            if (!Mathf.Approximately(clamped, rt.RingAngleRad)) {
+                rt.RingAngleRad = clamped;
+                Lines[i].RingAngleRad = clamped;
             }
         }
     }
