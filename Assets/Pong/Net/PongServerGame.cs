@@ -254,7 +254,7 @@ public class PongServerGame : MonoBehaviour
             return;
         }
 
-        if (head == PongProtocol.MsgPostGame || head == PongProtocol.MsgSpectate) {
+        if (head == PongProtocol.MsgPostGame) {
             client.ReadyForNextMatch = false;
             SetClientInGame(client, false);
             return;

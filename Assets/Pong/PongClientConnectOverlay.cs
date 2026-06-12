@@ -143,7 +143,9 @@ public class PongClientConnectOverlay : MonoBehaviour
     void ConfirmSpectateOnly()
     {
         if (Client == null) return;
-        Client.SendSpectate();
+        // Server treats SPECTATE and POSTGAME identically; the local _spectating flag is what
+        // suppresses the "You've lost" panel until the round ends.
+        Client.SendPostGame();
     }
 
     void HandleNames(IList<string> playerNames)
