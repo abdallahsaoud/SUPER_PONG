@@ -172,8 +172,6 @@ public class PongServerGame : MonoBehaviour
             TickPreMatchCountdown(dt, inGameCount);
         } else if (_state == BallState.Playing) {
             StepBall(dt);
-        } else if (_state == BallState.Won) {
-            TickPostRoundLobby(dt, connectedCount, inGameCount);
         }
 
         _stateAccumulator += dt;
@@ -237,14 +235,6 @@ public class PongServerGame : MonoBehaviour
                 || _state == BallState.LobbyCountdown)
             && GetInGameCount() >= MinPlayersToPlay) {
             BeginJoinLobbyCountdown("player joined");
-            return;
-        }
-
-        if (_state == BallState.Won) {
-            TryStartMatchWhenReady();
-            if (_postRoundLobbyRemaining > 0f) {
-                _server.Send(client, PongProtocol.FormatCountdown(GetPostRoundCountdownSeconds()));
-            }
         }
     }
 
@@ -382,10 +372,7 @@ public class PongServerGame : MonoBehaviour
 
     void StartMatch()
     {
-        // Only players who explicitly opted into THIS match (READY — sent on connect and again from
-        // the end-of-round menu) take part. A player idle on the end-of-round modal never readied,
-        // so they must stay a spectator instead of being silently dragged into the next round.
-        if (GetReadyForNextMatchCount() < MinPlayersToPlay) {
+        if (GetInGameCount() < MinPlayersToPlay) {
             EnterWaitingForPlayers("not enough ready players");
             return;
         }
@@ -393,27 +380,13 @@ public class PongServerGame : MonoBehaviour
         _joinLobbyCountdownRemaining = 0f;
         _preMatchCountdownRemaining = 0f;
         _postRoundLobbyRemaining = 0f;
-
-        // Decide participation BEFORE clearing readiness: readied owners play (Intact), everyone
-        // else spectates this round (Eliminated → ball ignores them, platform hidden client-side).
-        for (int i = 0; i < _runtime.Length; i++) {
-            var rt = _runtime[i];
-            bool participates = rt.Assigned && rt.Owner != null && rt.Owner.ReadyForNextMatch;
-            rt.Health = participates ? CircleArenaConfig.HealthIntact : CircleArenaConfig.HealthEliminated;
-        }
-        // Readiness is consumed by the match start; the next round will require a fresh opt-in.
         ClearAllReadyForNextMatch();
         BroadcastCountdown(0);
-        // Re-spread everyone exactly once, at the round boundary. This is the only point where
-        // angles change for an established player.
+        for (int i = 0; i < _runtime.Length; i++) {
+            _runtime[i].Health = CircleArenaConfig.HealthIntact;
+        }
         RespreadPlayerAngles();
         BroadcastRosterAndAssign();
-        // Tell clients which lines are spectating so their platforms are hidden for the round.
-        for (int i = 0; i < _runtime.Length; i++) {
-            if (_runtime[i].Assigned && _runtime[i].Health >= CircleArenaConfig.HealthEliminated) {
-                _server.Broadcast(PongProtocol.FormatDamage(i, CircleArenaConfig.HealthEliminated));
-            }
-        }
         Debug.Log("PongServerGame: MATCH_STARTED");
         ServeBall();
     }
@@ -496,15 +469,12 @@ public class PongServerGame : MonoBehaviour
 
     void ScheduleNextMatchAfterWin()
     {
-        int connectedCount = GetAssignedCount();
-        if (connectedCount < MinPlayersToPlay) {
-            EnterWaitingForPlayers("not enough players after win");
-            return;
-        }
-
-        // Open the post-round lobby. The next match only starts once enough players have
-        // explicitly readied (see TickPostRoundLobby / TryStartMatchWhenReady).
-        BeginPostRoundLobby();
+        // Kick everyone so the next round only includes players who explicitly reconnect
+        // ("Stay for next match"). Avoids idle post-game menus keeping a ghost paddle slot.
+        Debug.Log("PongServerGame: round ended — disconnecting all clients.");
+        if (EnableDiagnostics) PongDiagnostics.Log("RoundEnded disconnect-all");
+        _server.DisconnectAll();
+        EnterWaitingForPlayers("round ended — waiting for reconnects");
     }
 
     void TickPostRoundLobby(float dt, int connectedCount, int inGameCount)

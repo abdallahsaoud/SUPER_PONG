@@ -98,6 +98,16 @@ public class PongServer : MonoBehaviour
 
     public void Close() => CloseInternal();
 
+    /// <summary>
+    /// Close every TCP connection (e.g. end of round). Each client gets OnClientDisconnected.
+    /// </summary>
+    public void DisconnectAll()
+    {
+        for (int i = _connections.Count - 1; i >= 0; i--) {
+            HandleDisconnect(i);
+        }
+    }
+
     /// <summary>Send a single framed message to one client. Message must already include the trailing '\n'.</summary>
     public void Send(ClientConnection client, string framedMessage)
     {
