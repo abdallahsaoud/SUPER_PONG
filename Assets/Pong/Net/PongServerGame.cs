@@ -20,6 +20,16 @@ public class PongServerGame : MonoBehaviour
     public bool DebugNetworkLogs = false;
     public float DebugLogRate = 1f;
 
+    [Header("Diagnostics")]
+    [Tooltip("Write a periodic + on-anomaly diagnostics log to Application.persistentDataPath/pong-diag.log.")]
+    public bool EnableDiagnostics = true;
+
+    // Hard cap on bounce resolutions per substep. A healthy ball bounces at most once or twice;
+    // anything more means a degenerate (NaN / escaped) state that would otherwise loop forever.
+    const int MaxBounceIterationsPerSubstep = 8;
+    // Finite ball that somehow got this far from the centre is treated as escaped and re-served.
+    const float BallEscapeRadius = CircleArenaConfig.Radius * 2f;
+
     [Header("Post-round lobby")]
     [Tooltip("After a 2-player round ends, wait this long for more players before the next match.")]
     public float PostRoundLobbySeconds = 10f;
@@ -64,6 +74,8 @@ public class PongServerGame : MonoBehaviour
     float _nextDebugStateLogTime;
     uint _stateSeq;
     readonly System.Diagnostics.Stopwatch _clock = new System.Diagnostics.Stopwatch();
+    float _diagAccum;
+    float _diagMaxFrameDt;
 
     void Awake()
     {
@@ -124,10 +136,12 @@ public class PongServerGame : MonoBehaviour
             _server.OnMessageReceived -= HandleMessage;
             _server.OnUdpPaddle -= HandleUdpPaddle;
         }
+        PongDiagnostics.Close();
     }
 
     void Start()
     {
+        if (EnableDiagnostics) PongDiagnostics.Init("server");
         Lines.Clear();
         RebuildRuntime();
         EnterWaitingForPlayers("startup");
@@ -138,6 +152,7 @@ public class PongServerGame : MonoBehaviour
         if (!_server.IsListening) return;
         EnsureRuntime();
         float dt = Time.unscaledDeltaTime;
+        if (EnableDiagnostics) TickDiagnostics(dt);
         int connectedCount = GetAssignedCount();
         int inGameCount = GetInGameCount();
 
@@ -185,13 +200,36 @@ public class PongServerGame : MonoBehaviour
         var rt = _runtime[idx];
         rt.Assigned = true;
         rt.Owner = client;
-        rt.Health = CircleArenaConfig.HealthIntact;
         rt.DisplayName = ResolveDisplayName(client, idx);
         rt.ColorSlot = PickUnusedColorSlot(idx);
+
+        if (MatchInProgress) {
+            // A round is already running: don't reshuffle the live players. The newcomer joins as
+            // a spectator (eliminated for the current round, so the ball ignores them and their
+            // platform stays hidden client-side) and is folded into the next round by StartMatch,
+            // which is the only place that re-spreads angles. NOT re-spreading here is what keeps
+            // existing paddles from teleporting / overlapping mid-match.
+            rt.Health = CircleArenaConfig.HealthEliminated;
+            BroadcastRosterAndAssign();
+            _server.Broadcast(PongProtocol.FormatDamage(idx, CircleArenaConfig.HealthEliminated));
+            Debug.Log("PongServerGame: " + rt.DisplayName + " joined mid-match as spectator on line "
+                + idx + " (total " + Lines.Count + ").");
+            if (EnableDiagnostics) {
+                PongDiagnostics.Log("ClientConnected line=" + idx + " total=" + Lines.Count
+                    + " conns=" + _server.ConnectionCount + " spectator=1");
+            }
+            return;
+        }
+
+        rt.Health = CircleArenaConfig.HealthIntact;
         RespreadPlayerAngles();
 
         BroadcastRosterAndAssign();
         Debug.Log("PongServerGame: " + rt.DisplayName + " joined line " + idx + " (total " + Lines.Count + ").");
+        if (EnableDiagnostics) {
+            PongDiagnostics.Log("ClientConnected line=" + idx + " total=" + Lines.Count
+                + " conns=" + _server.ConnectionCount);
+        }
 
         if ((_state == BallState.WaitingForPlayers
                 || _state == BallState.LobbyCountdown)
@@ -213,20 +251,38 @@ public class PongServerGame : MonoBehaviour
         int idx = client.LineIndex;
         if (idx < 0 || idx >= Lines.Count) return;
 
+        if (EnableDiagnostics) {
+            PongDiagnostics.Log("ClientDisconnected line=" + idx + " remaining=" + (Lines.Count - 1)
+                + (MatchInProgress ? " deferred=1" : ""));
+        }
+
+        client.LineIndex = -1;
+
+        if (MatchInProgress) {
+            // Don't remove/re-index the line during a live round — that would re-spread angles and
+            // teleport the remaining players. Instead, vacate it: drop the owner and mark it
+            // eliminated so the ball ignores it and clients hide its platform. The line is actually
+            // removed (and angles re-spread) at the next round boundary by CleanupVacatedLines.
+            var leaving = _runtime[idx];
+            leaving.Owner = null;
+            leaving.Health = CircleArenaConfig.HealthEliminated;
+            _server.Broadcast(PongProtocol.FormatDamage(idx, CircleArenaConfig.HealthEliminated));
+
+            // A survivor (or nobody) left alive: end the round with a WIN rather than silently
+            // dropping into "waiting". GetAssignedCount ignores vacated ghosts, so this also
+            // covers the case where the last real player disconnected.
+            CheckForLastPlayerStanding();
+            if (GetAssignedCount() < MinPlayersToPlay
+                && _state != BallState.WaitingForPlayers) {
+                EnterWaitingForPlayers("player disconnected mid-match");
+            }
+            return;
+        }
+
         Lines.RemoveAt(idx);
         ShrinkRuntimeAfterRemove(idx);
         ReassignLineIndices();
         BroadcastRosterAndAssign();
-
-        client.LineIndex = -1;
-
-        // Mid-match: if only one alive player remains (or zero), end the round with a WIN
-        // for the survivor so they don't get silently dumped into "waiting for players".
-        // Eliminated paddles already don't count as alive, so this also covers the case
-        // where every other player has already lost when the leaver disconnects.
-        if (_state == BallState.Playing) {
-            CheckForLastPlayerStanding();
-        }
 
         if (GetAssignedCount() < MinPlayersToPlay
             && _state != BallState.WaitingForPlayers) {
@@ -238,6 +294,33 @@ public class PongServerGame : MonoBehaviour
     {
         RespreadPlayerAngles();
         BroadcastRosterAndAssign();
+    }
+
+    /// <summary>
+    /// True while a round's roster is locked (pre-match countdown or active play). Joins/leaves
+    /// during this window must not re-spread angles, otherwise live paddles teleport/overlap.
+    /// </summary>
+    bool MatchInProgress => _state == BallState.Starting || _state == BallState.Playing;
+
+    /// <summary>
+    /// Removes lines whose owner has gone (vacated mid-match by a disconnect) and re-spreads the
+    /// survivors. Called only at round boundaries so it never disturbs a live round.
+    /// </summary>
+    void CleanupVacatedLines()
+    {
+        if (_runtime == null) return;
+        bool changed = false;
+        for (int i = Lines.Count - 1; i >= 0; i--) {
+            if (i < _runtime.Length && _runtime[i] != null && _runtime[i].Owner == null) {
+                Lines.RemoveAt(i);
+                ShrinkRuntimeAfterRemove(i);
+                changed = true;
+            }
+        }
+        if (changed) {
+            RespreadPlayerAngles();
+            BroadcastRosterAndAssign();
+        }
     }
 
     void HandleMessage(PongServer.ClientConnection client, string message)
@@ -307,6 +390,11 @@ public class PongServerGame : MonoBehaviour
         _state = BallState.Playing;
         _winnerLine = -1;
         _server.Broadcast(PongProtocol.FormatReset());
+        if (EnableDiagnostics) {
+            PongDiagnostics.Log(string.Format(
+                "ServeBall dir=({0:0.00},{1:0.00}) speed={2:0.0} players={3}",
+                _ballDir.x, _ballDir.y, BallSpeed, GetAliveAssignedCount()));
+        }
     }
 
     void StartMatch()
@@ -322,9 +410,14 @@ public class PongServerGame : MonoBehaviour
         // Readiness is consumed by the match start; the next round will require a fresh opt-in.
         ClearAllReadyForNextMatch();
         BroadcastCountdown(0);
+        // Fold in roster changes that were deferred during the previous round: drop lines left by
+        // mid-match disconnects, then re-spread everyone (including spectators who joined mid-round)
+        // exactly once. This is the only point where angles change for an established player.
+        CleanupVacatedLines();
         for (int i = 0; i < _runtime.Length; i++) {
             _runtime[i].Health = CircleArenaConfig.HealthIntact;
         }
+        RespreadPlayerAngles();
         BroadcastRosterAndAssign();
         Debug.Log("PongServerGame: MATCH_STARTED");
         ServeBall();
@@ -525,6 +618,9 @@ public class PongServerGame : MonoBehaviour
         _winnerLine = -1;
         _ballPos = BallStart;
         _ballDir = Vector2.zero;
+        // The round is over: it's now safe to drop any lines vacated by mid-match disconnects so the
+        // lobby roster reflects who's actually still connected.
+        CleanupVacatedLines();
         _server.Broadcast(PongProtocol.FormatReset());
         Debug.Log("PongServerGame: waiting (" + GetAssignedCount() + " connected) reason=" + reason);
     }
@@ -537,8 +633,21 @@ public class PongServerGame : MonoBehaviour
         for (int step = 0; step < steps; step++) {
             _ballPos += _ballDir * BallSpeed * subDt;
 
+            // Safeguard: a NaN/Inf or wildly escaped ball must never enter the bounce loop, which
+            // would otherwise spin forever (NaN compares false against every bound) and freeze the
+            // server. Detect and re-serve instead.
+            if (!IsBallStateFinite() || _ballPos.magnitude > BallEscapeRadius) {
+                RecoverBall(IsBallStateFinite() ? "ball-escaped" : "ball-nonfinite");
+                return;
+            }
+
+            int bounceGuard = 0;
             while (CircleArenaConfig.ReflectBallOffRing(ref _ballPos, ref _ballDir, BallRadius)) {
                 HandleWallBounceWithoutPlayerHit();
+                if (++bounceGuard >= MaxBounceIterationsPerSubstep) {
+                    RecoverBall("bounce-loop");
+                    return;
+                }
             }
 
             for (int i = 0; i < Lines.Count; i++) {
@@ -558,6 +667,47 @@ public class PongServerGame : MonoBehaviour
                 return;
             }
         }
+    }
+
+    static bool IsFinite(float f) => !float.IsNaN(f) && !float.IsInfinity(f);
+
+    bool IsBallStateFinite()
+        => IsFinite(_ballPos.x) && IsFinite(_ballPos.y) && IsFinite(_ballDir.x) && IsFinite(_ballDir.y);
+
+    /// <summary>
+    /// Bring a degenerate ball back to a sane, in-bounds state instead of letting the simulation
+    /// freeze. Keeps the match running; logged so we can see how often (and why) it triggers.
+    /// </summary>
+    void RecoverBall(string reason)
+    {
+        if (EnableDiagnostics) {
+            PongDiagnostics.Warn(string.Format(
+                "RecoverBall reason={0} pos=({1},{2}) dir=({3},{4}) speed={5} state={6}",
+                reason, _ballPos.x, _ballPos.y, _ballDir.x, _ballDir.y, BallSpeed, _state));
+        }
+
+        _ballPos = BallStart;
+        _ballDir = Random.insideUnitCircle;
+        if (_ballDir.sqrMagnitude < 1e-4f) _ballDir = Vector2.right;
+        _ballDir.Normalize();
+        BallSpeed = Mathf.Clamp(BallSpeed, CircleArenaConfig.DefaultBallSpeed, CircleArenaConfig.MaxBallSpeed);
+        _wallBouncesSincePlayerHit = 0;
+    }
+
+    void TickDiagnostics(float dt)
+    {
+        if (dt > _diagMaxFrameDt) _diagMaxFrameDt = dt;
+        _diagAccum += dt;
+        if (_diagAccum < 1f) return;
+
+        long mem = System.GC.GetTotalMemory(false);
+        PongDiagnostics.Log(string.Format(
+            "tick state={0} ball=({1:0.00},{2:0.00}) |dir|={3:0.000} speed={4:0.0} conns={5} udpSeq={6} maxFrameMs={7:0.0} mem={8:0.0}MB",
+            _state, _ballPos.x, _ballPos.y, _ballDir.magnitude, BallSpeed,
+            _server.ConnectionCount, _stateSeq, _diagMaxFrameDt * 1000f, mem / 1048576.0));
+
+        _diagAccum = 0f;
+        _diagMaxFrameDt = 0f;
     }
 
     void HandleWallBounceWithoutPlayerHit()
@@ -714,6 +864,10 @@ public class PongServerGame : MonoBehaviour
         rt.Health = CircleArenaConfig.HealthEliminated;
         _server.Broadcast(PongProtocol.FormatDamage(lineIndex, CircleArenaConfig.HealthEliminated));
         Debug.Log("PongServerGame: line " + lineIndex + " eliminated.");
+        if (EnableDiagnostics) {
+            PongDiagnostics.Log("EliminatePlayer line=" + lineIndex
+                + " ball=(" + _ballPos.x.ToString("0.00") + "," + _ballPos.y.ToString("0.00") + ")");
+        }
         CheckForLastPlayerStanding();
     }
 
@@ -769,7 +923,9 @@ public class PongServerGame : MonoBehaviour
         if (_runtime == null) return 0;
         int count = 0;
         for (int i = 0; i < _runtime.Length; i++) {
-            if (_runtime[i].Assigned) count++;
+            // Skip vacated ghosts (a line whose owner disconnected mid-match but isn't removed yet),
+            // so "connected players" reflects who's really here, not stale roster slots.
+            if (_runtime[i].Assigned && _runtime[i].Owner != null) count++;
         }
         return count;
     }

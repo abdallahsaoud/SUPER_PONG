@@ -23,6 +23,10 @@ public class PongUdpSocket
         public IPEndPoint Source;
     }
 
+    // Upper bound on datagrams drained per Poll() so a flood (or a buggy peer) can never spin a
+    // single frame forever; leftovers are simply read on the next frame.
+    const int MaxDatagramsPerPoll = 2048;
+
     UdpClient _udp;
     IPEndPoint _source = new IPEndPoint(IPAddress.Any, 0);
     readonly List<Datagram> _scratch = new List<Datagram>(8);
@@ -71,7 +75,8 @@ public class PongUdpSocket
         if (_udp == null) return _scratch;
 
         try {
-            while (_udp.Available > 0) {
+            int budget = MaxDatagramsPerPoll;
+            while (_udp.Available > 0 && budget-- > 0) {
                 byte[] data = _udp.Receive(ref _source);
                 string message = Encoding.UTF8.GetString(data);
                 // Format* helpers append a trailing '\n' (TCP framing). On UDP a datagram is

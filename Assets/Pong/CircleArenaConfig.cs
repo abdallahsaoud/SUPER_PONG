@@ -169,7 +169,12 @@ public static class CircleArenaConfig
         if (dist <= maxDist) return false;
 
         Vector2 normal = pos / dist;
-        pos = normal * maxDist;
+        // Snap just *inside* the boundary (not exactly on it). At max speed the ball can land
+        // exactly on the ring and, with float rounding, stay marginally outside while moving
+        // inward (dot < 0) — which re-triggers this method every iteration without ever changing
+        // the direction, freezing the bounce loop. Nudging inward guarantees the next magnitude
+        // check is unambiguously inside, so the loop always terminates.
+        pos = normal * (maxDist - 1e-3f);
 
         float dot = Vector2.Dot(dir, normal);
         if (dot > 0f) {

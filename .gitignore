@@ -38,6 +38,10 @@ crashlytics-build.properties
 *.booproj
 *.suo
 
+# Unity crash/auto recovery scenes (local-only, not shareable)
+/Assets/_Recovery/
+/Assets/_Recovery.meta
+
 # OS junk
 .DS_Store
 .DS_Store?

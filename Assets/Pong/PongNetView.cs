@@ -435,7 +435,14 @@ public class PongNetView : MonoBehaviour
         if (dt < 0.0) dt = 0.0;
         double cap = MaxExtrapolationMs / 1000.0;
         if (dt > cap) dt = cap;
-        return s.BallPos + s.BallVel * (float)dt;
+        Vector2 predicted = s.BallPos + s.BallVel * (float)dt;
+
+        // During a packet gap we extrapolate in a straight line, which would otherwise push the
+        // ball visibly outside the ring. Clamp the predicted position to the arena radius so the
+        // client never shows an escaped ball (the authoritative server position will reconcile it).
+        float maxR = CircleArenaConfig.Radius;
+        if (predicted.magnitude > maxR) predicted = predicted.normalized * maxR;
+        return predicted;
     }
 
     void EnsureSampleAngles(int len)
